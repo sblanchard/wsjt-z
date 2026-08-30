@@ -69,7 +69,9 @@ typedef int SOCKET;
 
 # ifndef MAKEWORD
 #  define MAKEWORD(low, high) \
-    (static_cast<unsigned short> ((low) | ((high) << 8)))
+    (static_cast<unsigned short> ( \
+        (static_cast<unsigned char> (low)) | \
+        (static_cast<unsigned short> (static_cast<unsigned char> (high)) << 8)))
 # endif
 
 struct WSADATA

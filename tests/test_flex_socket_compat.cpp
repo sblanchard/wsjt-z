@@ -8,13 +8,26 @@ class TestFlexSocketCompat : public QObject
   Q_OBJECT
 
 private slots:
+  void initTestCase ();
   void socket_lifecycle ();
   void startup_and_cleanup_succeed ();
   void receive_timeout_is_honoured ();
   void receive_buffer_is_reported ();
   void retryable_errors_classified ();
   void sigpipe_suppression_does_not_fail ();
+  void cleanupTestCase ();
 };
+
+void TestFlexSocketCompat::initTestCase ()
+{
+  WSADATA data {};
+  QVERIFY (0 == WSAStartup (MAKEWORD (2, 2), &data));
+}
+
+void TestFlexSocketCompat::cleanupTestCase ()
+{
+  QCOMPARE (WSACleanup (), 0);
+}
 
 void TestFlexSocketCompat::startup_and_cleanup_succeed ()
 {
@@ -84,6 +97,24 @@ void TestFlexSocketCompat::receive_buffer_is_reported ()
   QVERIFY2 (obtained > 0, "must report the buffer size actually obtained");
   QVERIFY2 (obtained >= 64 * 1024,
             qPrintable (QString ("receive buffer only %1 bytes").arg (obtained)));
+
+  // Cross-check independently of the helper: a stub that just echoes the
+  // requested byte count back would satisfy the bounds above on every
+  // platform without ever telling us what the OS actually granted. Ask the
+  // OS ourselves and require the helper's return value to match exactly.
+  int actual = 0;
+#if defined (Q_OS_WIN)
+  int length = sizeof (actual);
+#else
+  socklen_t length = sizeof (actual);
+#endif
+  QCOMPARE (getsockopt (
+      s,
+      SOL_SOCKET,
+      SO_RCVBUF,
+      reinterpret_cast<char *> (&actual),
+      &length), 0);
+  QCOMPARE (obtained, actual);
 
   closesocket (s);
 }
