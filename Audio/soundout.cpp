@@ -317,6 +317,30 @@ void SoundOutput::restart (QIODevice * source)
       return;
     }
 
+  // DEVIATION from W7PP: the donor never cleared Native FLEX TX state
+  // on a rig change away from "Flex Native VITA-49"; this replaces that
+  // absent cleanup. A rig change always goes through restart() (the
+  // property above is recomputed fresh on every call), so this is the
+  // correct single place to drop stale flex routing state -- not
+  // suspend()/resume(), whose semantics must stay about pausing and
+  // resuming an in-progress Native FLEX session, not about rig
+  // switching.
+  //
+  // m_native_flex_timer is not stopped here: it is unconditionally
+  // stopped by SoundOutput::stop()/reset() whenever the previous TX
+  // was still active at the top of this call (Modulator::start()
+  // calls stop() when m_state != Idle before ever reaching this
+  // restart()), and otherwise it self-stops inside nativeFlexPump()
+  // within one 10 ms tick of the previous session reaching Idle --
+  // always well before a human-timescale rig change and the next
+  // restart() call. m_native_flex_tx_timer is never started anywhere
+  // in this file (the pacer stays dormant by design; direct send is
+  // used instead), so it can never be active here. Neither timer
+  // needs a defensive stop.
+  m_native_flex_source = nullptr;
+  m_native_flex_tx_radio_address.clear ();
+  m_native_flex_tx_stream_id = 0;
+
   if (!m_device.isNull ())
     {
       QAudioFormat format (m_device.preferredFormat ());
@@ -863,16 +887,6 @@ void SoundOutput::suspend ()
   m_native_flex_tx_next_packet_us = 0;
   m_native_flex_tx_pace_phase = 0;
 
-  // DEVIATION from W7PP: the donor stopped the pump timer here without
-  // clearing m_native_flex_source. suspend ()/resume () have no callers
-  // anywhere in this tree today, but they are public Q_SLOTS reachable
-  // by name through the meta-object system, so a stale non-null source
-  // would arm the moment anyone wires them up: resume () could then
-  // restart the pump against a dead source and resend VITA datagrams to
-  // a Flex radio while a different rig is selected. Null it
-  // unconditionally, same as reset ()/stop () already do.
-  m_native_flex_source = nullptr;
-
   if (m_native_flex_timer
       && m_native_flex_timer->isActive ())
     {
@@ -895,7 +909,8 @@ void SoundOutput::resume ()
   // W7PPNativeFlexTxCapture property, so that even if
   // m_native_flex_source/m_native_flex_timer were ever left non-null
   // while a non-Flex rig is selected, resume () still cannot restart
-  // the Native FLEX pump. See the DEVIATION note in suspend () above.
+  // the Native FLEX pump. See the rig-change DEVIATION note in the
+  // non-flex path of restart () above.
   bool const native_flex =
       QCoreApplication::instance()
       && QCoreApplication::instance()
