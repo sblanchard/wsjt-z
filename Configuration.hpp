@@ -90,6 +90,9 @@ public:
   QAudioDeviceInfo const& audio_output_device () const;
   AudioDevice::Channel audio_output_channel () const;
 
+  bool flex_native_rx () const;
+  int flex_dax_channel () const;
+
   // These query methods should be used after a call to exec() to
   // determine if either the audio input or audio output stream
   // parameters have changed. The respective streams should be

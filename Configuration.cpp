@@ -186,7 +186,9 @@
 #include "item_delegates/FrequencyDeltaDelegate.hpp"
 #include "item_delegates/MessageItemDelegate.hpp"
 #include "Transceiver/TransceiverFactory.hpp"
+#include "Transceiver/NativeFlexTransceiver.hpp"
 #include "Transceiver/Transceiver.hpp"
+#include "Transceiver/NativeFlexRadioSelection.hpp"
 #include "models/Bands.hpp"
 #include "models/IARURegions.hpp"
 #include "models/Modes.hpp"
@@ -514,6 +516,7 @@ private:
   void write_settings ();
 
   void find_audio_devices ();
+  void update_w7pp_flex_rx_controls ();
   QAudioDeviceInfo find_audio_device (QAudio::Mode, QComboBox *, QString const& device_name);
   void load_audio_devices (QAudio::Mode, QComboBox *, QAudioDeviceInfo *);
   void update_audio_channels (QComboBox const *, int, QComboBox *, bool);
@@ -671,6 +674,8 @@ private:
   bool restart_tci_device_;
   bool is_tci_;
   bool tci_audio_;
+  bool w7pp_flex_native_rx_ {false};
+  int w7pp_flex_dax_channel_ {1};
   qint32 volume_;
 
   Type2MsgGen type_2_msg_gen_;
@@ -888,6 +893,8 @@ QAudioDeviceInfo const& Configuration::audio_input_device () const {return m_->a
 AudioDevice::Channel Configuration::audio_input_channel () const {return m_->audio_input_channel_;}
 QAudioDeviceInfo const& Configuration::audio_output_device () const {return m_->audio_output_device_;}
 AudioDevice::Channel Configuration::audio_output_channel () const {return m_->audio_output_channel_;}
+bool Configuration::flex_native_rx () const {return m_->w7pp_flex_native_rx_;}
+int Configuration::flex_dax_channel () const {return m_->w7pp_flex_dax_channel_;}
 bool Configuration::restart_audio_input () const {return m_->restart_sound_input_device_;}
 bool Configuration::restart_audio_output () const {return m_->restart_sound_output_device_;}
 bool Configuration::restart_tci () const {return m_->restart_tci_device_;}
@@ -1089,6 +1096,24 @@ bool Configuration::is_dummy_rig () const
 bool Configuration::transceiver_online ()
 {
   LOG_TRACE (m_->cached_rig_state_);
+  // W7PP :
+  // Enable the offline TX capture tap ONLY for the exact
+  // Flex Native VITA-49 backend.
+  if (QCoreApplication::instance())
+    {
+      QCoreApplication::instance()->setProperty(
+          "W7PPNativeFlexTxCapture",
+          m_->rig_params_.rig_name == "Flex Native VITA-49");
+    }
+
+  // W7PP :
+  // Native FLEX only: supply selected DAX channel before rig start.
+  if (m_->rig_params_.rig_name == "Flex Native VITA-49")
+    {
+      NativeFlexTransceiver::set_dax_channel(
+          m_->w7pp_flex_dax_channel_);
+    }
+
   return m_->have_rig ();
 }
 
@@ -1482,6 +1507,12 @@ Configuration::impl::impl (Configuration * self, QNetworkAccessManager * network
   // this must be done after the default paths above are set
   read_settings ();
 
+  // W7PP Flex RX method selector on the Audio tab.
+  connect (ui_->w7pp_flex_rx_method_combo_box,
+           static_cast<void (QComboBox::*)(int)> (&QComboBox::currentIndexChanged),
+           this,
+           [this] (int) { update_w7pp_flex_rx_controls (); });
+
   // set up dynamic loading of audio devices
   connect (ui_->sound_input_combo_box, &LazyFillComboBox::about_to_show_popup, [this] () {
       QGuiApplication::setOverrideCursor (QCursor {Qt::WaitCursor});
@@ -1779,6 +1810,9 @@ void Configuration::impl::initialize_models ()
   ui_->cbLargerTabWidget->setChecked(largerTabWidget_);
   ui_->TCI_spin_box->setValue (volume_);
   ui_->tci_audio_check_box->setChecked (tci_audio_);
+  ui_->w7pp_flex_rx_method_combo_box->setCurrentIndex (w7pp_flex_native_rx_ ? 1 : 0);
+  ui_->w7pp_flex_dax_channel_combo_box->setCurrentIndex (w7pp_flex_dax_channel_ - 1);
+  update_w7pp_flex_rx_controls ();
   ui_->cbSuperFox->setChecked(bSuperFox_);
   ui_->cbContestName->setChecked(Individual_Contest_Name_);
   ui_->gbSpecialOpActivity->setChecked(bSpecialOp_);
@@ -1918,6 +1952,10 @@ void Configuration::impl::done (int r)
 void Configuration::impl::read_settings ()
 {
   SettingsGroup g {settings_, "Configuration"};
+  w7pp_flex_native_rx_ = settings_->value ("W7PPFlexNativeRx", false).toBool ();
+  w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();
+  if (w7pp_flex_dax_channel_ < 1 || w7pp_flex_dax_channel_ > 8)
+    w7pp_flex_dax_channel_ = 1;
   LOG_INFO(QString{"Configuration Settings (%1)"}.arg(settings_->fileName()));
   QStringList keys = settings_->allKeys();
   //Q_FOREACH (auto const& item, keys)
@@ -2192,6 +2230,21 @@ void Configuration::impl::read_settings ()
   alertCmdLine_ = settings_->value("alertCmdLine").toString();
 }
 
+void Configuration::impl::update_w7pp_flex_rx_controls ()
+{
+  bool const native =
+      !(is_tci_ && tci_audio_)
+      && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1;
+
+  ui_->sound_input_label->setText (
+      native ? tr ("Windows Input (not used):") : tr ("&Input:"));
+
+  ui_->sound_input_combo_box->setEnabled (!native);
+  ui_->sound_input_channel_combo_box->setEnabled (!native);
+  ui_->w7pp_flex_dax_channel_label->setEnabled (native);
+  ui_->w7pp_flex_dax_channel_combo_box->setEnabled (native);
+}
+
 void Configuration::impl::find_audio_devices ()
 {
   //
@@ -2224,6 +2277,8 @@ void Configuration::impl::find_audio_devices ()
 void Configuration::impl::write_settings ()
 {
   SettingsGroup g {settings_, "Configuration"};
+  settings_->setValue ("W7PPFlexNativeRx", w7pp_flex_native_rx_);
+  settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);
 
   settings_->setValue ("MyCall", my_callsign_);
   settings_->setValue ("MyGrid", my_grid_);
@@ -2544,7 +2599,7 @@ void Configuration::impl::set_rig_invariants ()
 
 bool Configuration::impl::validate ()
 {
-  if (ui_->sound_input_combo_box->currentIndex () < 0
+  if (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0 && ui_->sound_input_combo_box->currentIndex () < 0
       && next_audio_input_device_.isNull ())
     {
       find_tab (ui_->sound_input_combo_box);
@@ -2552,7 +2607,7 @@ bool Configuration::impl::validate ()
       return false;
     }
 
-  if (ui_->sound_input_channel_combo_box->currentIndex () < 0
+  if (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0 && ui_->sound_input_channel_combo_box->currentIndex () < 0
       && next_audio_input_device_.isNull ())
     {
       find_tab (ui_->sound_input_combo_box);
@@ -2786,6 +2841,11 @@ void Configuration::impl::accept ()
   //           << "chan:" << audio_output_channel_
   //           << "reset i/p:" << restart_sound_input_device_
   //           << "reset o/p:" << restart_sound_output_device_;
+
+  w7pp_flex_native_rx_ =
+      (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1);
+  w7pp_flex_dax_channel_ =
+      ui_->w7pp_flex_dax_channel_combo_box->currentIndex () + 1;
 
   my_callsign_ = ui_->callsign_line_edit->text ();
   my_grid_ = ui_->grid_line_edit->text ();
@@ -3207,6 +3267,14 @@ void Configuration::impl::on_CAT_handshake_button_group_buttonClicked (int /* id
 void Configuration::impl::on_rig_combo_box_currentIndexChanged (int /* index */)
 {
   set_rig_invariants ();
+
+  // W7PP :
+  // Only this exact W7PP backend activates Native FLEX.
+  // Every other radio continues through stock WSJT-X logic.
+  if (ui_->rig_combo_box->currentText() == "Flex Native VITA-49")
+    {
+      NativeFlexRadioSelection::refresh(this);
+    }
 }
 
 void Configuration::impl::on_CAT_data_bits_button_group_buttonClicked (int /* id */)
