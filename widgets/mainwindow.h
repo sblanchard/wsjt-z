@@ -712,6 +712,7 @@ private:
   int     m_flex_vita_generation {0};
   bool    m_flex_vita_watchdog_armed {false};
   quint64 m_flex_vita_watchdog_packets {0};
+  bool    m_flexOutAttenuationRepurposed {false};  // W7PP : true while outAttenuation is repurposed to Flex RF watts
   bool    inSettings = false;
   bool    m_diskData;
   bool    m_loopall;

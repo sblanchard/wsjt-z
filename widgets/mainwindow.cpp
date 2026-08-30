@@ -2257,6 +2257,13 @@ void MainWindow::readSettings()
       ui->outAttenuation->setInvertedAppearance(false);
       ui->outAttenuation->setInvertedControls(false);
 
+      // W7PP : outAttenuation is now repurposed to Flex RF watts.
+      // Record this so a later real Flex->non-Flex transition (in
+      // on_actionSettings_triggered()) knows to restore stock
+      // geometry and a sane value -- and so it does nothing at all
+      // when this never happened (the ordinary non-Flex case).
+      m_flexOutAttenuationRepurposed = true;
+
       ui->outAttenuation->setToolTip(
           tr("Waiting for FLEX RF power status"));
 
@@ -3249,25 +3256,49 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
         ui->w7ppFlexTxAudioAttenuation->setVisible(false);
         ui->w7ppFlexTxAudioScaleWidget->setVisible(false);
 
-        ui->outAttenuation->setProperty("w7ppNativeFlexPowerReady", false);
+        // DEVIATION from W7PP: gate the outAttenuation restore on an
+        // actual, detected Flex->non-Flex transition rather than on
+        // "the current rig happens not to be Flex" -- which is true on
+        // essentially every accepted Settings dialog for the entire
+        // non-Flex install base. Without this flag, an ordinary
+        // non-Flex operator who changed bands (per-band power memory
+        // is not persisted until app close) or moved the power slider
+        // during the session, then opened Settings for any unrelated
+        // reason and clicked OK, would have TX audio drive silently
+        // reverted to whatever was on disk at last startup, and the
+        // current band's power memory corrupted with that stale
+        // value -- exactly the harm this restore exists to prevent,
+        // reached through a far more common path than a rig switch.
+        // When outAttenuation was never repurposed to Flex RF watts,
+        // this block must touch it in no way at all.
+        if (m_flexOutAttenuationRepurposed)
+          {
+            ui->outAttenuation->setProperty("w7ppNativeFlexPowerReady", false);
 
-        // Stock geometry, taken from mainwindow.ui's own outAttenuation
-        // defaults (not the donor's, which are 0-200 for its own,
-        // unmodified ui file).
-        ui->outAttenuation->setRange(0, 450);
-        ui->outAttenuation->setInvertedAppearance(true);
-        ui->outAttenuation->setInvertedControls(true);
-        ui->outAttenuation->setEnabled(true);
-        ui->outAttenuation->setToolTip(tr("Adjust Tx audio level"));
+            // Stock geometry, taken from mainwindow.ui's own outAttenuation
+            // defaults (not the donor's, which are 0-200 for its own,
+            // unmodified ui file).
+            ui->outAttenuation->setRange(0, 450);
+            ui->outAttenuation->setInvertedAppearance(true);
+            ui->outAttenuation->setInvertedControls(true);
+            ui->outAttenuation->setEnabled(true);
+            ui->outAttenuation->setToolTip(tr("Adjust Tx audio level"));
 
-        m_settings->beginGroup("Common");
-        int const restored_out_attenuation =
-            m_settings->value("OutAttenuation", 0).toInt();
-        m_settings->endGroup();
+            // The live value is still a Flex watts number here (e.g.
+            // 40), which the non-Flex path below would misread as dB
+            // attenuation -- a real transition genuinely needs this
+            // restored.
+            m_settings->beginGroup("Common");
+            int const restored_out_attenuation =
+                m_settings->value("OutAttenuation", 0).toInt();
+            m_settings->endGroup();
 
-        m_block_pwr_tooltip = true;
-        ui->outAttenuation->setValue(restored_out_attenuation);
-        m_block_pwr_tooltip = false;
+            m_block_pwr_tooltip = true;
+            ui->outAttenuation->setValue(restored_out_attenuation);
+            m_block_pwr_tooltip = false;
+
+            m_flexOutAttenuationRepurposed = false;
+          }
       }
     syncFlexVitaReceiver ();
     // Native Flex RX bypasses Windows soundcard input.
