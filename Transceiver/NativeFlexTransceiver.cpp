@@ -3,6 +3,7 @@
 #include <QTextStream>
 #include <QCoreApplication>
 #include <QVariant>
+#include <QDebug>
 
 #include <QAbstractSocket>
 #include <QElapsedTimer>
@@ -270,38 +271,58 @@ void NativeFlexTransceiver::capture_dax_tx_stream(
    * FlexVitaReceiver already does exactly this on the RX side ("Accept only
    * the stream belonging to THIS API client handle"); the TX side was
    * missing the equivalent guard.
+   *
+   * DEVIATION from W7PP: fail closed when "client_handle=" itself is
+   * absent from the line. The original form of this guard only checked
+   * ownership when the field was present ("if (owner_pos >= 0)"), so a
+   * dax_tx status line missing that field skipped the ownership test
+   * entirely and was latched anyway -- precisely the mis-route this
+   * deviation exists to prevent. Treat a missing field as "not ours"
+   * and return; wait_for_dax_tx_stream() already fails cleanly with a
+   * clear "no WSJT-owned DAX-TX stream" error if no stream is ever
+   * captured, so the worst case is a startup error, not a silent
+   * mis-route. Log the skipped line with qWarning() (captured by the
+   * app's log handler) rather than CAT_TRACE (filtered out and
+   * invisible in practice) so the case is diagnosable.
    */
   {
     int const owner_pos = line.indexOf("client_handle=");
 
-    if (owner_pos >= 0)
+    if (owner_pos < 0)
       {
-        int const owner_start =
-            owner_pos + static_cast<int>(qstrlen("client_handle="));
+        qWarning()
+            << "NativeFlexTransceiver: dax_tx status line has no"
+               " client_handle= field, treating as not ours:"
+            << line;
 
-        int owner_end =
-            line.indexOf(' ', owner_start);
+        return;
+      }
 
-        if (owner_end < 0)
-          {
-            owner_end = line.size();
-          }
+    int const owner_start =
+        owner_pos + static_cast<int>(qstrlen("client_handle="));
 
-        bool owner_ok = false;
+    int owner_end =
+        line.indexOf(' ', owner_start);
 
-        quint32 const owner_handle =
-            QString::fromLatin1(
-                line.mid(
-                    owner_start,
-                    owner_end - owner_start))
-                .trimmed()
-                .toUInt(&owner_ok, 16);
+    if (owner_end < 0)
+      {
+        owner_end = line.size();
+      }
 
-        if (!owner_ok
-            || owner_handle != client_handle_)
-          {
-            return;
-          }
+    bool owner_ok = false;
+
+    quint32 const owner_handle =
+        QString::fromLatin1(
+            line.mid(
+                owner_start,
+                owner_end - owner_start))
+            .trimmed()
+            .toUInt(&owner_ok, 16);
+
+    if (!owner_ok
+        || owner_handle != client_handle_)
+      {
+        return;
       }
   }
 

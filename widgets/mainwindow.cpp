@@ -3335,6 +3335,20 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
             ui->outAttenuation->setValue(restored_out_attenuation);
             m_block_pwr_tooltip = false;
 
+            // DEVIATION from W7PP: QSlider::setValue() above emits
+            // valueChanged() -- which is what actually re-establishes
+            // SoundOutput::m_volume via outAttenuationChanged() -- only
+            // when the restored value differs from the value the
+            // widget already holds. That widget was just showing a
+            // Flex RF-watts number, so a restored dB-attenuation
+            // setting that happens to equal it numerically emits
+            // nothing, leaving m_volume on the Flex TX-audio
+            // attenuation for the new, non-Flex rig. Mirror the same
+            // hazard's fix in readSettings() (see its comment there)
+            // and emit explicitly, using the same a/10.0 scaling as
+            // on_outAttenuation_valueChanged().
+            Q_EMIT outAttenuationChanged(restored_out_attenuation / 10.0);
+
             m_flexOutAttenuationRepurposed = false;
           }
       }

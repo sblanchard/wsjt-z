@@ -52,6 +52,10 @@ Q_SIGNALS:
 private:
   bool checkStream () const;
 
+  // DEVIATION from W7PP: rate-limit Native FLEX TX send-failure
+  // reporting -- see m_native_flex_tx_error_reported below.
+  void nativeFlexReportTxError (QString const& message);
+
 private Q_SLOTS:
   void handleStateChanged (QAudio::State);
   void nativeFlexPump ();
@@ -84,6 +88,18 @@ private:
   int m_native_flex_tx_pace_phase {0};
   qint64 m_native_flex_bytes_per_frame;
   QByteArray m_native_flex_buffer;
+
+  // DEVIATION from W7PP: rate-limit Native FLEX TX-audio send-failure
+  // reporting. The clear () calls added around
+  // nativeFlexWriteVitaPacket ()'s error paths let the packetiser
+  // resynchronise instead of wedging, but that means a persistent
+  // failure (radio powered off mid-transmission, interface down) now
+  // retries and re-emits error () roughly every 5.33 ms for the rest
+  // of the transmission -- and that signal reaches a modal critical
+  // message box. Latch after the first report per transmission so at
+  // most one dialog appears; reset in restart ()'s Native FLEX branch.
+  bool m_native_flex_tx_error_reported {false};
+  int m_native_flex_tx_error_count {0};
 };
 
 #endif

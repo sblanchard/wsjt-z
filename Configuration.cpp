@@ -893,7 +893,25 @@ QAudioDeviceInfo const& Configuration::audio_input_device () const {return m_->a
 AudioDevice::Channel Configuration::audio_input_channel () const {return m_->audio_input_channel_;}
 QAudioDeviceInfo const& Configuration::audio_output_device () const {return m_->audio_output_device_;}
 AudioDevice::Channel Configuration::audio_output_channel () const {return m_->audio_output_channel_;}
-bool Configuration::flex_native_rx () const {return m_->w7pp_flex_native_rx_;}
+// DEVIATION from W7PP: the donor's Audio-tab RX-method setting alone
+// governs Native FLEX RX. WSJT-Z can reach this code with the setting
+// still on Native VITA-49 while a non-Flex (or no) rig is selected --
+// e.g. an operator with no FlexRadio hardware selects it out of
+// curiosity, or simply switches away from the Flex rig without
+// touching this Audio-tab control -- and every consumer of this
+// accessor (socket bind, worker thread, discovery retries, and
+// suppression of the normal audio input) would activate with no rig
+// to back it, producing minutes of GUI freezes and permanent silence
+// with no decodes. This is the single choke point every consumer
+// already goes through, so gate it here on the exact rig name as well
+// as the stored preference. The stored preference itself is left
+// untouched so it is honoured again the moment the Flex rig is
+// reselected.
+bool Configuration::flex_native_rx () const
+{
+  return m_->w7pp_flex_native_rx_
+      && m_->rig_params_.rig_name == "Flex Native VITA-49";
+}
 int Configuration::flex_dax_channel () const {return m_->w7pp_flex_dax_channel_;}
 bool Configuration::restart_audio_input () const {return m_->restart_sound_input_device_;}
 bool Configuration::restart_audio_output () const {return m_->restart_sound_output_device_;}
@@ -2595,6 +2613,21 @@ void Configuration::impl::set_rig_invariants ()
                                    || TransceiverFactory::basic_transceiver_name_ != rig);
   ui_->split_operation_group_box->setEnabled (WSJT_RIG_NONE_CAN_SPLIT
                                               || TransceiverFactory::basic_transceiver_name_ != rig);
+
+  // DEVIATION from W7PP: state the Native FLEX RX constraint in the UI
+  // instead of silently ignoring it. Configuration::flex_native_rx()
+  // now also requires the selected rig to be exactly
+  // "Flex Native VITA-49" (see the acceptance-criterion comment there),
+  // so leaving these controls enabled for every other rig would let an
+  // operator change a setting that visibly has no effect until they
+  // switch back to that rig. Disable rather than reset them, so the
+  // stored preference is still in place -- and takes effect again --
+  // the moment the Flex rig is reselected.
+  bool const is_flex_native_rig = (rig == "Flex Native VITA-49");
+  ui_->w7pp_flex_rx_method_combo_box->setEnabled (is_flex_native_rig);
+  ui_->w7pp_flex_dax_channel_combo_box->setEnabled (
+      is_flex_native_rig
+      && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1);
 }
 
 bool Configuration::impl::validate ()

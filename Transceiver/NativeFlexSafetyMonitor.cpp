@@ -1128,7 +1128,33 @@ struct NativeFlexSafetyMonitor::Impl
 
       stopRequested.store(true);
 
-      closeSockets();
+      // DEVIATION from W7PP: portability fix, same class as
+      // FlexVitaReceiver::Impl::stop(). Calling closeSockets() here
+      // ran ::closesocket() on the caller thread while the worker
+      // could be sitting in ::select() on the very same descriptors.
+      // On Windows that closesocket() wakes a blocked select(); on
+      // POSIX it does not, and the freed descriptor numbers become
+      // immediately reusable, so within the <=100 ms select timeout
+      // the worker could FD_ISSET()/recv() on a descriptor that now
+      // belongs to something else entirely (plausibly another
+      // Native FLEX socket opened by a restart). Shut the sockets
+      // down from here instead -- shutdown() reliably unblocks
+      // select() on both platforms without invalidating the
+      // descriptor -- and leave the actual close() to the worker
+      // thread itself, at the closeSockets() call sites already in
+      // fail() and at the end of run().
+      SOCKET const tcp = tcpSocket.load();
+      SOCKET const udp = udpSocket.load();
+
+      if (INVALID_SOCKET != tcp)
+        {
+          ::shutdown(tcp, SD_BOTH);
+        }
+
+      if (INVALID_SOCKET != udp)
+        {
+          ::shutdown(udp, SD_BOTH);
+        }
     }
 
     if (worker.joinable())

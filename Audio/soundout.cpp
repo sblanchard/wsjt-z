@@ -15,6 +15,7 @@
 #include <QDebug>
 
 #include "Logger.hpp"
+#include "qt_helpers.hpp"
 #include "Audio/AudioDevice.hpp"
 
 #include "moc_soundout.cpp"
@@ -168,6 +169,12 @@ void SoundOutput::restart (QIODevice * source)
       m_native_flex_vita_payload.clear ();
       m_native_flex_vita_sequence = 0;
       m_native_flex_decimate_phase = 0;
+
+      // DEVIATION from W7PP: reset the TX send-failure report latch
+      // for the new transmission (see the member declaration in
+      // soundout.h for why it exists).
+      m_native_flex_tx_error_reported = false;
+      m_native_flex_tx_error_count = 0;
 
       // Reference stream ID from the captured SmartSDR/DAX
       // stream.  This value is only for offline comparison.
@@ -401,6 +408,40 @@ void SoundOutput::restart (QIODevice * source)
 //  LOG_DEBUG ("Selected buffer size (bytes): " << m_stream->bufferSize () << " period size: " << m_stream->periodSize ());
 }
 
+// DEVIATION from W7PP: the three m_native_flex_vita_payload.clear ()
+// calls below correctly fixed the donor's packetiser wedge, but the
+// consequence is that a persistent send failure (radio powered off
+// mid-transmission, interface down -> EHOSTUNREACH) now retries and
+// re-emits error () roughly every 5.33 ms for the rest of the
+// transmission -- and that signal reaches a modal critical message
+// box (see MainWindow::showSoundOutError()). Emit at most one error
+// per transmission; count and silently drop the rest, mentioning the
+// count in the single message that is emitted.
+void SoundOutput::nativeFlexReportTxError (QString const& message)
+{
+  ++m_native_flex_tx_error_count;
+
+  if (m_native_flex_tx_error_reported)
+    {
+      // Already surfaced one modal dialog for this transmission; a
+      // persistent failure would otherwise repeat this roughly every
+      // 5.33 ms for the rest of it. Keep counting -- cheap -- and log
+      // rather than pop another dialog, so the extent of the failure
+      // is still diagnosable from the log.
+      LOG_DEBUG (
+          QString {"Native FLEX TX error suppressed (#%1 this transmission): %2"}
+              .arg (m_native_flex_tx_error_count)
+              .arg (message));
+      return;
+    }
+
+  m_native_flex_tx_error_reported = true;
+
+  Q_EMIT error (
+      tr ("%1 (further identical failures this transmission will be logged, not shown)")
+          .arg (message));
+}
+
 void SoundOutput::nativeFlexWriteVitaPacket ()
 {
   if (m_native_flex_vita_payload.size () != 256)
@@ -531,7 +572,11 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
        */
       if (!m_native_flex_tx_socket)
         {
-          Q_EMIT error (
+          // DEVIATION from W7PP: see nativeFlexReportTxError () above
+          // -- a persistent failure here (e.g. socket torn down
+          // concurrently) would otherwise pop a fresh modal dialog
+          // roughly every 5.33 ms for the rest of the transmission.
+          nativeFlexReportTxError (
               tr ("Native FLEX TX UDP socket is unavailable."));
 
           // DEVIATION from W7PP: the donor returned here leaving
@@ -552,7 +597,9 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
               QString::fromLatin1 (
                   m_native_flex_tx_radio_address)))
         {
-          Q_EMIT error (
+          // DEVIATION from W7PP: see nativeFlexReportTxError () above
+          // -- same modal-storm risk as the socket-unavailable path.
+          nativeFlexReportTxError (
               tr ("Native FLEX TX radio address is invalid."));
 
           // DEVIATION from W7PP: see the clear () note above -- same
@@ -569,7 +616,13 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
 
       if (written != live_packet.size ())
         {
-          Q_EMIT error (
+          // DEVIATION from W7PP: see nativeFlexReportTxError () above
+          // -- this is the persistent-failure case the latch exists
+          // for (radio powered off mid-transmission, interface down
+          // -> EHOSTUNREACH, etc.), which otherwise reasserts a modal
+          // dialog on essentially every packet for the rest of the
+          // transmission.
+          nativeFlexReportTxError (
               tr ("Native FLEX TX UDP datagram send failed."));
 
           // DEVIATION from W7PP: see the clear () note above -- same
