@@ -10,6 +10,7 @@
 #include <QThread>
 #include <QProcess>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QTimer>
 #include <QDateTime>
 #include <QList>
@@ -862,6 +863,23 @@ private:
   QLabel band_hopping_label;
   QLabel ndecodes_label;
   QLabel mode_switch_status_label;
+
+  // W7PP FLEX-only meter row.
+  QWidget flex_meter_row;
+
+  // W7PP Native FLEX compact display meters.
+  QLabel flex_power_label;
+  QLabel flex_swr_label;
+  QLabel flex_voltage_label;
+  QLabel flex_temperature_label;
+
+  // W7PP Native FLEX TX input LEVEL meter.
+  QProgressBar flex_level_meter;
+
+  // W7PP Native FLEX ATU controls.
+  QPushButton flex_atu_button;
+  QPushButton flex_bypass_button;
+
   QProgressBar progressBar;
   QLabel watchdog_label;
 
@@ -879,6 +897,12 @@ private:
   QProcess p4;
 
   WSPRNet *wsprNet;
+
+  // W7PP Native FLEX safety trip / operator inhibit.
+  QString nativeFlexSafetyProblemText(bool require_ready) const;
+  void nativeFlexSafetyTrip(QString const& problems);
+  bool m_nativeFlexSafetyInhibited {false};
+  bool m_nativeFlexSafetyPopupPending {false};
 
   QTimer m_guiTimer;
   QTimer stopWRTimer;

@@ -91,6 +91,7 @@
 #include "models/Bands.hpp"
 #include "Transceiver/TransceiverFactory.hpp"
 #include "Transceiver/NativeFlexTransceiver.hpp"
+#include "Transceiver/NativeFlexSafetyMonitor.hpp"
 #include "models/StationList.hpp"
 #include "validators/LiveFrequencyValidator.hpp"
 #include "Network/MessageClient.hpp"
@@ -272,6 +273,43 @@ int* ipc_qmap;
 
 namespace
 {
+QString const w7ppFlexMeterNeutralStyle =
+    QStringLiteral(
+        "QLabel{color:#c0c0c0; background-color:#202020}");
+
+QString const w7ppFlexMeterGreenStyle =
+    QStringLiteral(
+        "QLabel{color:#000000; background-color:#90ee90}");
+
+QString const w7ppFlexMeterYellowStyle =
+    QStringLiteral(
+        "QLabel{color:#000000; background-color:#fff59d}");
+
+QString const w7ppFlexMeterRedStyle =
+    QStringLiteral(
+        "QLabel{color:#ffffff; background-color:#ff0000}");
+
+// W7PP ATU button colors.
+QString const w7ppFlexAtuNeutralStyle =
+    QStringLiteral(
+        "QPushButton{color:#c0c0c0; background-color:#202020;"
+        "border:1px solid #606060; padding:0px;}");
+
+QString const w7ppFlexAtuGreenStyle =
+    QStringLiteral(
+        "QPushButton{color:#000000; background-color:#90ee90;"
+        "border:1px solid #606060; padding:0px;}");
+
+QString const w7ppFlexAtuBlueStyle =
+    QStringLiteral(
+        "QPushButton{color:#000000; background-color:#4da6ff;"
+        "border:1px solid #606060; padding:0px;}");
+
+QString const w7ppFlexAtuRedStyle =
+    QStringLiteral(
+        "QPushButton{color:#ffffff; background-color:#ff0000;"
+        "border:1px solid #606060; padding:0px;}");
+
   Radio::Frequency constexpr default_frequency {14074000};
   QRegExp message_alphabet {"[- @A-Za-z0-9+./?#<>;$]*"};
   // grid exact match excluding RR73
@@ -3971,6 +4009,111 @@ void MainWindow::on_actionAbout_triggered()                  //Display "About"
   CAboutDlg {this}.exec ();
 }
 
+//------------------------------------------------ Native FLEX safety
+QString MainWindow::nativeFlexSafetyProblemText(bool require_ready) const
+{
+  if (m_config.rig_name() != "Flex Native VITA-49")
+    {
+      return {};
+    }
+
+  auto const safety =
+      NativeFlexSafetyMonitor::gateSnapshot();
+
+  QStringList problems;
+
+  if (!safety.monitor_connected)
+    {
+      problems << tr("- Safety monitor is not connected.");
+    }
+
+  if (!safety.meter_stream_active)
+    {
+      problems << tr("- Safety meter stream is inactive.");
+    }
+
+  if (!safety.interlock_seen)
+    {
+      problems << tr("- No FLEX interlock status is available.");
+    }
+
+  if (!safety.tx_allowed)
+    {
+      problems << tr("- FLEX reports that transmit is not allowed.");
+    }
+
+  if (require_ready && !safety.interlock_ready)
+    {
+      problems << tr("- FLEX interlock is not READY.");
+    }
+
+  if (!safety.all_safety_meters_seen)
+    {
+      problems << tr("- One or more safety meters are missing.");
+    }
+
+  if (
+      safety.meter_age_ms < 0
+      || safety.meter_age_ms > 2000)
+    {
+      problems << tr("- Safety telemetry is stale.");
+    }
+
+  return problems.join(QStringLiteral("\n"));
+}
+
+void MainWindow::nativeFlexSafetyTrip(QString const& problems)
+{
+  if (m_config.rig_name() != "Flex Native VITA-49")
+    {
+      return;
+    }
+
+  m_nativeFlexSafetyInhibited = true;
+
+  /*
+   * Stop transmission FIRST using WSJT's existing Stop-TX path.
+   * This also disables automatic TX and clears Enable Tx.
+   */
+  on_stopTxButton_clicked();
+
+  if (m_nativeFlexSafetyPopupPending)
+    {
+      return;
+    }
+
+  m_nativeFlexSafetyPopupPending = true;
+
+  QString const shownProblems =
+      problems.isEmpty()
+          ? tr("- Native FLEX safety condition is not healthy.")
+          : problems;
+
+  QString const message =
+      tr("Transmission was stopped.\n\n"
+         "Problem(s):\n%1\n\n"
+         "Correct the problem, then click Enable Tx again.\n"
+         "TX will not resume automatically.")
+        .arg(shownProblems);
+
+  /*
+   * Defer the modal popup until the current control pass returns.
+   * The Stop-TX request therefore executes before the dialog.
+   */
+  QTimer::singleShot(
+      0,
+      this,
+      [this, message] ()
+      {
+        MessageBox::warning_message(
+            this,
+            tr("Native FLEX Safety - TX INHIBITED"),
+            message);
+
+        m_nativeFlexSafetyPopupPending = false;
+      });
+}
+
 // FT8 thread-count selectors. Pushed to Fortran via dec_data.params.nmt
 // at decode dispatch (see mainwindow.cpp where other dec_data.params.* are set).
 void MainWindow::on_actionMTAuto_triggered() { m_ft8threads = 0; }
@@ -4014,6 +4157,31 @@ void MainWindow::on_actionFT8WidebandDXCallSearch_toggled(bool checked) { m_FT8W
 
 void MainWindow::on_autoButton_clicked (bool checked)
 {
+  /*
+   * W7PP
+   *
+   * A safety trip remains latched until an Enable Tx request
+   * is made and the complete pre-key safety cache is healthy.
+   */
+  if (
+      checked
+      && m_config.rig_name() == "Flex Native VITA-49"
+      && m_nativeFlexSafetyInhibited)
+    {
+      QString const problems =
+          nativeFlexSafetyProblemText(true);
+
+      if (!problems.isEmpty())
+        {
+          ui->autoButton->setChecked(false);
+          m_auto = false;
+          nativeFlexSafetyTrip(problems);
+          return;
+        }
+
+      // Operator retry is allowed only after a healthy recheck.
+      m_nativeFlexSafetyInhibited = false;
+    }
   // Z
   if (checked) tx_watchdog(false);
   stopWRTimer.stop();             // stop a running Tx3 timer
@@ -4635,6 +4803,153 @@ void MainWindow::createStatusBar()                           //createStatusBar
   // Z
   progressBar.setAlignment(Qt::AlignCenter);
 
+  // Separate FLEX-only meter row.
+  // Hidden radios consume no vertical space.
+  flex_meter_row.setParent(ui->centralWidget);
+  flex_meter_row.setFixedHeight(18);
+  flex_meter_row.setSizePolicy(
+      QSizePolicy::Expanding,
+      QSizePolicy::Fixed);
+  flex_meter_row.setVisible(
+      m_config.rig_name() == "Flex Native VITA-49");
+
+  // Append at bottom of central GUI, immediately above status bar.
+  //
+  // W7PP DEVIATION: the donor appends flex_meter_row to
+  // ui->verticalLayout_6, a top-level QVBoxLayout of the donor's
+  // centralWidget. This fork's centralWidget uses a QGridLayout
+  // (gridLayout_15) instead and has no verticalLayout_6. Appending
+  // as a new full-width row keeps flex_meter_row flush with the
+  // window's left edge, directly above the status bar, which is
+  // what the guiUpdate() alignment math below relies on.
+  ui->gridLayout_15->addWidget(
+      &flex_meter_row,
+      ui->gridLayout_15->rowCount(),
+      0,
+      1,
+      ui->gridLayout_15->columnCount());
+
+  // Compact forward-power box.
+  flex_power_label.setParent(&flex_meter_row);
+  flex_power_label.setAlignment(Qt::AlignCenter);
+  flex_power_label.setFixedSize(QSize {82, 18});
+  flex_power_label.setFrameStyle(
+      QFrame::Panel | QFrame::Sunken);
+  flex_power_label.setText(QStringLiteral("PWR --.- W"));
+  flex_power_label.setStyleSheet(w7ppFlexMeterNeutralStyle);
+  flex_power_label.show();
+
+  // W7PP compact SWR meter.
+  flex_swr_label.setParent(&flex_meter_row);
+  flex_swr_label.setAlignment(Qt::AlignCenter);
+  flex_swr_label.setFixedSize(QSize {72, 18});
+  flex_swr_label.setFrameStyle(
+      QFrame::Panel | QFrame::Sunken);
+  flex_swr_label.setText(QStringLiteral("SWR --.--"));
+  flex_swr_label.setStyleSheet(w7ppFlexMeterNeutralStyle);
+  flex_swr_label.show();
+
+  // W7PP compact +13.8B voltage meter.
+  flex_voltage_label.setParent(&flex_meter_row);
+  flex_voltage_label.setAlignment(Qt::AlignCenter);
+  flex_voltage_label.setFixedSize(QSize {92, 18});
+  flex_voltage_label.setFrameStyle(
+      QFrame::Panel | QFrame::Sunken);
+  flex_voltage_label.setText(QStringLiteral("VOLTS --.-"));
+  flex_voltage_label.setStyleSheet(w7ppFlexMeterNeutralStyle);
+  flex_voltage_label.show();
+
+  // W7PP compact PA temperature meter.
+  flex_temperature_label.setParent(&flex_meter_row);
+  flex_temperature_label.setAlignment(Qt::AlignCenter);
+  flex_temperature_label.setFixedSize(QSize {82, 18});
+  flex_temperature_label.setFrameStyle(
+      QFrame::Panel | QFrame::Sunken);
+  flex_temperature_label.setText(QStringLiteral("TEMP --.- C"));
+  flex_temperature_label.setStyleSheet(w7ppFlexMeterNeutralStyle);
+  flex_temperature_label.show();
+
+  // Moving LEVEL meter.
+  // Its X position is updated from the timer geometry.
+  flex_level_meter.setParent(&flex_meter_row);
+  flex_level_meter.setFixedSize(QSize {150, 18});
+  flex_level_meter.setRange(-200, 0);
+  flex_level_meter.setValue(-200);
+  flex_level_meter.setFormat(QStringLiteral("LEVEL --.- dB"));
+  flex_level_meter.setAlignment(Qt::AlignCenter);
+  flex_level_meter.setTextVisible(true);
+  flex_level_meter.setStyleSheet(
+      QStringLiteral(
+          "QProgressBar {"
+          " border: 1px solid #606060;"
+          " background-color: #202020;"
+          " color: #c0c0c0;"
+          " text-align: center;"
+          "}"
+          "QProgressBar::chunk {"
+          " background-color: #404040;"
+          "}"));
+  flex_level_meter.show();
+
+  // W7PP Native FLEX ATU controls.
+  flex_atu_button.setParent(&flex_meter_row);
+  flex_atu_button.setFixedSize(QSize {72, 18});
+  flex_atu_button.setText(QStringLiteral("Tuner ON/OFF"));
+  flex_atu_button.setToolTip(QStringLiteral("Start FLEX ATU"));
+  flex_atu_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+  flex_atu_button.show();
+
+  flex_bypass_button.setParent(&flex_meter_row);
+  flex_bypass_button.setFixedSize(QSize {96, 18});
+  flex_bypass_button.setText(QStringLiteral("Tuner --"));
+  flex_bypass_button.setToolTip(QStringLiteral("ByPass FLEX ATU"));
+  flex_bypass_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+  flex_bypass_button.show();
+
+  connect(
+      &flex_atu_button,
+      &QPushButton::clicked,
+      this,
+      [this]
+      {
+        if (m_config.rig_name() != "Flex Native VITA-49")
+          return;
+
+        auto const display =
+            NativeFlexSafetyMonitor::displaySnapshot();
+
+        if (
+            !display.monitor_connected
+            || !display.atu_seen
+            || display.atu_state
+                == NativeFlexSafetyMonitor::AtuState::in_progress)
+          return;
+
+        (void)NativeFlexSafetyMonitor::requestAtuStart();
+      });
+
+  connect(
+      &flex_bypass_button,
+      &QPushButton::clicked,
+      this,
+      [this]
+      {
+        if (m_config.rig_name() != "Flex Native VITA-49")
+          return;
+
+        auto const display =
+            NativeFlexSafetyMonitor::displaySnapshot();
+
+        // ByPass is actionable only after a successful tune.
+        if (
+            !display.monitor_connected
+            || !display.atu_seen
+            || display.atu_state
+                != NativeFlexSafetyMonitor::AtuState::successful)
+          return;
+
+        (void)NativeFlexSafetyMonitor::requestAtuBypass();
+      });
 
   statusBar ()->addPermanentWidget (&watchdog_label);
   update_watchdog_label ();
@@ -7555,6 +7870,425 @@ void MainWindow::decodeBusy(bool b)                             //decodeBusy()
 //------------------------------------------------------------- //guiUpdate()
 void MainWindow::guiUpdate()
 {
+  // W7PP FLEX meter-row geometry.
+  //
+  // Existing status widgets remain completely untouched.
+  // PWR follows the left edge of Receiving.
+  // LEVEL follows the left edge of the TX/RX timer.
+  bool const flexMeterRowActive =
+      m_config.rig_name() == "Flex Native VITA-49";
+
+  flex_meter_row.setVisible(flexMeterRowActive);
+
+  if (flexMeterRowActive && flex_meter_row.isVisible())
+    {
+      QPoint const rowOrigin =
+          flex_meter_row.mapToGlobal(QPoint {0, 0});
+
+      QPoint const receivingOrigin =
+          tx_status_label.mapToGlobal(QPoint {0, 0});
+
+      QPoint const timerOrigin =
+          progressBar.mapToGlobal(QPoint {0, 0});
+
+      int const meterLeft =
+          receivingOrigin.x() - rowOrigin.x();
+
+      int const levelLeft =
+          timerOrigin.x() - rowOrigin.x();
+
+      int const pwrLeft = meterLeft;
+      int const swrLeft = pwrLeft + 84;
+      int const voltsLeft = swrLeft + 74;
+      int const tempLeft = voltsLeft + 94;
+
+      // W7PP :
+      // ATU controls immediately precede LEVEL.
+      // LEVEL itself remains locked to timerLeft.
+      int const bypassLeft = levelLeft - 98;
+      int const atuLeft = bypassLeft - 74;
+
+      flex_power_label.setGeometry(
+          pwrLeft,
+          0,
+          82,
+          18);
+
+      flex_swr_label.setGeometry(
+          swrLeft,
+          0,
+          72,
+          18);
+
+      flex_voltage_label.setGeometry(
+          voltsLeft,
+          0,
+          92,
+          18);
+
+      flex_temperature_label.setGeometry(
+          tempLeft,
+          0,
+          82,
+          18);
+
+      flex_atu_button.setGeometry(
+          atuLeft,
+          0,
+          72,
+          18);
+
+      flex_bypass_button.setGeometry(
+          bypassLeft,
+          0,
+          96,
+          18);
+
+      flex_level_meter.setGeometry(
+          levelLeft,
+          0,
+          150,
+          18);
+    }
+
+  // W7PP live ATU state display.
+  flex_atu_button.setVisible(flexMeterRowActive);
+  flex_bypass_button.setVisible(flexMeterRowActive);
+
+  if (flexMeterRowActive)
+    {
+      auto const atuDisplay =
+          NativeFlexSafetyMonitor::displaySnapshot();
+
+      if (!atuDisplay.monitor_connected || !atuDisplay.atu_seen)
+        {
+          flex_atu_button.setText(QStringLiteral("Tuner ON/OFF"));
+          flex_atu_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+
+          flex_bypass_button.setText(QStringLiteral("Tuner --"));
+          flex_bypass_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+        }
+      else
+        {
+          switch (atuDisplay.atu_state)
+            {
+            case NativeFlexSafetyMonitor::AtuState::bypassed:
+              flex_atu_button.setText(QStringLiteral("Tuner ON/OFF"));
+              flex_atu_button.setStyleSheet(w7ppFlexAtuGreenStyle);
+
+              flex_bypass_button.setText(QStringLiteral("Tuner Off"));
+              flex_bypass_button.setStyleSheet(w7ppFlexAtuGreenStyle);
+              break;
+
+            case NativeFlexSafetyMonitor::AtuState::in_progress:
+              flex_atu_button.setText(QStringLiteral("Tuner ON"));
+              flex_atu_button.setStyleSheet(w7ppFlexAtuBlueStyle);
+
+              flex_bypass_button.setText(QStringLiteral("Tuner Working"));
+              flex_bypass_button.setStyleSheet(w7ppFlexAtuRedStyle);
+              break;
+
+            case NativeFlexSafetyMonitor::AtuState::successful:
+              flex_atu_button.setText(QStringLiteral("Tuner ON"));
+              flex_atu_button.setStyleSheet(w7ppFlexAtuBlueStyle);
+
+              flex_bypass_button.setText(QStringLiteral("Push to ByPass"));
+              flex_bypass_button.setStyleSheet(w7ppFlexAtuBlueStyle);
+              break;
+
+            default:
+              flex_atu_button.setText(QStringLiteral("Tuner ON/OFF"));
+              flex_atu_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+
+              flex_bypass_button.setText(QStringLiteral("Tuner --"));
+              flex_bypass_button.setStyleSheet(w7ppFlexAtuNeutralStyle);
+              break;
+            }
+        }
+    }
+
+  /* W7PP FLEX LEVEL DISPLAY
+   *
+   * GUI-only 1 Hz read from the independent atomic telemetry
+   * cache.  No network I/O, no VITA parsing, no RX/TX audio
+   * processing and no PTT work occurs here.
+   */
+  {
+    static qint64 nextFlexLevelUiMs = 0;
+
+    qint64 const nowFlexLevelUiMs =
+        QDateTime::currentMSecsSinceEpoch();
+
+    if (nowFlexLevelUiMs >= nextFlexLevelUiMs)
+      {
+        nextFlexLevelUiMs = nowFlexLevelUiMs + 1000;
+
+        bool const nativeFlex =
+            m_config.rig_name() == "Flex Native VITA-49";
+
+        // : parent row controls FLEX-only visibility.
+        flex_level_meter.setVisible(nativeFlex);
+        flex_power_label.setVisible(nativeFlex);
+        flex_swr_label.setVisible(nativeFlex);
+        flex_voltage_label.setVisible(nativeFlex);
+        flex_temperature_label.setVisible(nativeFlex);
+
+        if (nativeFlex)
+          {
+            auto const display =
+                NativeFlexSafetyMonitor::displaySnapshot();
+
+            bool const telemetryUsable =
+                display.monitor_connected
+                && display.meter_stream_active
+                && display.meter_age_ms >= 0
+                && display.meter_age_ms <= 2000;
+
+            if (telemetryUsable && display.forward_power_seen)
+              {
+                double const dbm =
+                    static_cast<double>(
+                        display.forward_power_raw)
+                    / 128.0;
+
+                double const watts =
+                    std::pow(
+                        10.0,
+                        (dbm - 30.0) / 10.0);
+
+                flex_power_label.setText(
+                    QStringLiteral("PWR %1 W")
+                        .arg(watts, 0, 'f', 1));
+
+                if (m_transmitting)
+                  {
+                    flex_power_label.setStyleSheet(
+                        w7ppFlexMeterGreenStyle);
+                  }
+                else
+                  {
+                    flex_power_label.setStyleSheet(
+                        w7ppFlexMeterNeutralStyle);
+                  }
+              }
+            else
+              {
+                flex_power_label.setText(
+                    QStringLiteral("PWR --.- W"));
+                flex_power_label.setStyleSheet(
+                    w7ppFlexMeterNeutralStyle);
+              }
+
+            // W7PP SWR.
+            if (telemetryUsable && display.swr_seen)
+              {
+                double const swr =
+                    static_cast<double>(display.swr_raw)
+                    / 128.0;
+
+                flex_swr_label.setText(
+                    QStringLiteral("SWR %1")
+                        .arg(swr, 0, 'f', 2));
+
+                if (swr >= 3.0)
+                  {
+                    flex_swr_label.setStyleSheet(
+                        w7ppFlexMeterRedStyle);
+                  }
+                else if (swr >= 2.0)
+                  {
+                    flex_swr_label.setStyleSheet(
+                        w7ppFlexMeterYellowStyle);
+                  }
+                else
+                  {
+                    flex_swr_label.setStyleSheet(
+                        w7ppFlexMeterGreenStyle);
+                  }
+              }
+            else
+              {
+                flex_swr_label.setText(
+                    QStringLiteral("SWR --.--"));
+                flex_swr_label.setStyleSheet(
+                    w7ppFlexMeterNeutralStyle);
+              }
+
+            // W7PP +13.8B voltage.
+            if (telemetryUsable && display.voltage_b_seen)
+              {
+                double const volts =
+                    static_cast<double>(display.voltage_b_raw)
+                    / 256.0;
+
+                flex_voltage_label.setText(
+                    QStringLiteral("VOLTS %1")
+                        .arg(volts, 0, 'f', 1));
+
+                if (volts < 11.0 || volts > 15.0)
+                  {
+                    flex_voltage_label.setStyleSheet(
+                        w7ppFlexMeterRedStyle);
+                  }
+                else
+                  {
+                    flex_voltage_label.setStyleSheet(
+                        w7ppFlexMeterGreenStyle);
+                  }
+              }
+            else
+              {
+                flex_voltage_label.setText(
+                    QStringLiteral("VOLTS --.-"));
+                flex_voltage_label.setStyleSheet(
+                    w7ppFlexMeterNeutralStyle);
+              }
+
+            // W7PP PA temperature.
+            if (telemetryUsable && display.pa_temperature_seen)
+              {
+                double const tempC =
+                    static_cast<double>(
+                        display.pa_temperature_raw)
+                    / 128.0;
+
+                flex_temperature_label.setText(
+                    QStringLiteral("TEMP %1 C")
+                        .arg(tempC, 0, 'f', 1));
+
+                if (tempC >= 72.0)
+                  {
+                    flex_temperature_label.setStyleSheet(
+                        w7ppFlexMeterRedStyle);
+                  }
+                else
+                  {
+                    flex_temperature_label.setStyleSheet(
+                        w7ppFlexMeterGreenStyle);
+                  }
+              }
+            else
+              {
+                flex_temperature_label.setText(
+                    QStringLiteral("TEMP --.- C"));
+                flex_temperature_label.setStyleSheet(
+                    w7ppFlexMeterNeutralStyle);
+              }
+
+            bool const usable =
+                m_transmitting
+                && telemetryUsable
+                && display.level_seen;
+
+            if (!usable)
+              {
+                flex_level_meter.setValue(-200);
+                flex_level_meter.setFormat(
+                    QStringLiteral("LEVEL --.- dB"));
+
+                flex_level_meter.setStyleSheet(
+                    QStringLiteral(
+                        "QProgressBar {"
+                        " border: 1px solid #606060;"
+                        " background-color: #202020;"
+                        " color: #c0c0c0;"
+                        " text-align: center;"
+                        "}"
+                        "QProgressBar::chunk {"
+                        " background-color: #404040;"
+                        "}"));
+              }
+            else
+              {
+                double const db =
+                    static_cast<double>(display.level_raw)
+                    / 128.0;
+
+                int meterValue =
+                    static_cast<int>(
+                        std::lround(db * 10.0));
+
+                if (meterValue < -200)
+                  meterValue = -200;
+
+                if (meterValue > 0)
+                  meterValue = 0;
+
+                flex_level_meter.setValue(meterValue);
+
+                flex_level_meter.setFormat(
+                    QStringLiteral("LEVEL %1 dB")
+                        .arg(db, 0, 'f', 1));
+
+                if (db >= 0.0)
+                  {
+                    // Overdrive / clipping boundary.
+                    flex_level_meter.setStyleSheet(
+                        QStringLiteral(
+                            "QProgressBar {"
+                            " border: 1px solid #800000;"
+                            " background-color: #202020;"
+                            " color: #ffffff;"
+                            " text-align: center;"
+                            "}"
+                            "QProgressBar::chunk {"
+                            " background-color: #ff0000;"
+                            "}"));
+                  }
+                else if (db >= -5.0)
+                  {
+                    // W7PP target region around the FLEX
+                    // recommended near-zero digital drive.
+                    flex_level_meter.setStyleSheet(
+                        QStringLiteral(
+                            "QProgressBar {"
+                            " border: 1px solid #8a7500;"
+                            " background-color: #202020;"
+                            " color: #000000;"
+                            " text-align: center;"
+                            "}"
+                            "QProgressBar::chunk {"
+                            " background-color: #ffd400;"
+                            "}"));
+                  }
+                else
+                  {
+                    flex_level_meter.setStyleSheet(
+                        QStringLiteral(
+                            "QProgressBar {"
+                            " border: 1px solid #006000;"
+                            " background-color: #202020;"
+                            " color: #ffffff;"
+                            " text-align: center;"
+                            "}"
+                            "QProgressBar::chunk {"
+                            " background-color: #00a800;"
+                            "}"));
+                  }
+              }
+          }
+      }
+  }
+
+  /* W7PP DURING-TX SAFETY CHECK
+   *
+   * Read only the atomic safety cache.
+   * No network I/O, meter parsing, or VITA processing here.
+   */
+  if (
+      m_config.rig_name() == "Flex Native VITA-49"
+      && m_transmitting
+      && !m_nativeFlexSafetyInhibited)
+    {
+      QString const problems =
+          nativeFlexSafetyProblemText(false);
+
+      if (!problems.isEmpty())
+        {
+          nativeFlexSafetyTrip(problems);
+        }
+    }
+
   static char message[38];
   static char msgsent[38];
   double txDuration;
@@ -12181,6 +12915,34 @@ void MainWindow::handle_transceiver_update (Transceiver::TransceiverState const&
 
 void MainWindow::handle_transceiver_failure (QString const& reason)
 {
+  /*
+   * W7PP
+   *
+   * A Native FLEX safety inhibit is an operator-correctable
+   * safety event, not a rig-control failure.  Do not reopen
+   * the radio or enter the normal rig-failure dialog path.
+   */
+  if (
+      m_config.rig_name() == "Flex Native VITA-49"
+      && reason.startsWith(
+          QStringLiteral("Native FLEX TX INHIBITED:")))
+    {
+      QString problems =
+          nativeFlexSafetyProblemText(true);
+
+      if (problems.isEmpty())
+        {
+          problems =
+              QStringLiteral("- ")
+              + reason.mid(
+                    QStringLiteral(
+                        "Native FLEX TX INHIBITED:").size())
+                    .trimmed();
+        }
+
+      nativeFlexSafetyTrip(problems);
+      return;
+    }
   update_dynamic_property (ui->readFreq, "state", "error");
   ui->readFreq->setEnabled (true);
   if (m_zdebug) log("on_stopTxButton_clicked: handle_transceiver_failure");
