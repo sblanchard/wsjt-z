@@ -1491,10 +1491,28 @@ Add the includes `<QQueue>`, `<QUdpSocket>`, `<QElapsedTimer>`, `<QTimer>`, `<QB
 
 Copy from `$W7PP/Audio/soundout.cpp`:
 - the file-scope `static QFile w7pp_native_flex_vita_dump_file;` (donor line 54)
-- the `native_flex` branch at the top of the stream-start method (donor lines 67-130), which reads the `W7PPNativeFlexTxCapture` property, verifies the source is an `AudioDevice`, stops any existing timer, records `m_native_flex_bytes_per_frame`, and reads `W7PPNativeFlexTxRadioAddress` and `W7PPNativeFlexTxStreamId`
-- the four method bodies `nativeFlexPump`, `nativeFlexTxPace`, `nativeFlexWriteVitaPacket`, `nativeFlexCloseVitaDump`
+- the `native_flex` branch at the top of `restart()` (donor lines 67-130), which reads the `W7PPNativeFlexTxCapture` property, verifies the source is an `AudioDevice`, stops any existing timer, records `m_native_flex_bytes_per_frame`, and reads `W7PPNativeFlexTxRadioAddress` and `W7PPNativeFlexTxStreamId`
+- the four new method bodies `nativeFlexWriteVitaPacket` (donor 355), `nativeFlexCloseVitaDump` (521), `nativeFlexTxPace` (548), `nativeFlexPump` (690)
 
-Port verbatim. This is real-time packet pacing; do not restructure it.
+**Also — and the earlier revision of this plan wrongly omitted these — four existing
+methods each gain a Native FLEX prologue (9-12 references apiece):**
+
+| Method | Donor lines | What the prologue does |
+|---|---|---|
+| `suspend()` | 809-835 | stops the TX pace timer, clears the packet queue, resets pacing state; if the flex pump timer was active, stops it, emits `status(tr("Suspended"))` and returns early |
+| `resume()` | 836-865 | if a flex source and idle pump timer exist, resets pacing state, restarts the pump, emits `status(tr("Sending"))` and returns early |
+| `reset()` | 866-891 | stops both timers, clears the queue, resets pacing state, drops `m_native_flex_source` |
+| `stop()` | 892-921 | same teardown as `reset()`, before the existing stream stop |
+
+`stop()`'s teardown is not optional bookkeeping: without it a live pacing timer can keep
+emitting VITA packets after transmit has ended.
+
+**Augment, do not replace.** WSJT-Z's versions of these four methods differ from the
+donor's — in particular WSJT-Z's `stop()` has no `#ifdef __APPLE__` macOS-Sequoia block,
+which the donor's does. Add the W7PP prologue to WSJT-Z's existing body and keep that
+body as the fallback path; never paste the donor's whole method over WSJT-Z's.
+
+Port the prologues verbatim. This is real-time packet pacing; do not restructure it.
 
 - [ ] **Step 3: Port the Modulator TX capture**
 
