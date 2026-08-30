@@ -201,7 +201,28 @@ void TransceiverBase::set (TransceiverState const& s,
     }
   if (!message.isEmpty ())
     {
-      offline (message);
+      /*
+       * W7PP
+       *
+       * Native FLEX TX safety inhibit is recoverable.
+       * Report it to MainWindow without calling offline(),
+       * because offline() immediately calls shutdown() and
+       * would tear down the still-good Native FLEX RX path.
+       *
+       * Every other transceiver error retains the original
+       * offline()/shutdown() behavior.
+       */
+      if (
+          message.startsWith(
+              QStringLiteral("Native FLEX TX INHIBITED:")))
+        {
+          requested_.ptt(actual_.ptt ());
+          Q_EMIT failure (message);
+        }
+      else
+        {
+          offline (message);
+        }
     }
 }
 

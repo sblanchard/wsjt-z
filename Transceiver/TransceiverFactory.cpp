@@ -4,6 +4,7 @@
 
 #include "HamlibTransceiver.hpp"
 #include "TCITransceiver.hpp"
+#include "NativeFlexTransceiver.hpp"
 #include "DXLabSuiteCommanderTransceiver.hpp"
 #include "HRDTransceiver.hpp"
 #include "EmulateSplitTransceiver.hpp"
@@ -31,6 +32,7 @@ namespace
       , HRDId
       , OmniRigOneId
       , OmniRigTwoId
+      , NativeFlexId
     };
 }
 
@@ -41,7 +43,20 @@ TransceiverFactory::TransceiverFactory ()
   TCITransceiver::register_transceivers (&logger_, &transceivers_, TCI1Id, TCI2Id);
   DXLabSuiteCommanderTransceiver::register_transceivers (&logger_, &transceivers_, CommanderId);
   HRDTransceiver::register_transceivers (&logger_, &transceivers_, HRDId);
-  
+
+  // W7PP Native Flex is an isolated additional backend.
+  // Port type NONE is intentional: radio discovery will be automatic.
+  // No Native Flex object or socket exists unless this radio is selected.
+  transceivers_.insert (
+      "Flex Native VITA-49",
+      Capabilities {
+          NativeFlexId,
+          Capabilities::none,
+          true,
+          false,
+          false,
+          true});
+
 #if defined (WIN32)
   // OmniRig is ActiveX/COM server so only on Windows
   OmniRigTransceiver::register_transceivers (&logger_, &transceivers_, OmniRigOneId, OmniRigTwoId);
@@ -205,6 +220,19 @@ std::unique_ptr<Transceiver> TransceiverFactory::create (ParameterPack const& pa
       }
       break;
 #endif
+
+    case NativeFlexId:
+      {
+        result.reset (
+            new NativeFlexTransceiver {
+                &logger_});
+
+        if (target_thread)
+          {
+            result->moveToThread (target_thread);
+          }
+      }
+      break;
 
     default:
       result.reset (new HamlibTransceiver {&logger_, supported_transceivers ()[params.rig_name].model_number_, params});
