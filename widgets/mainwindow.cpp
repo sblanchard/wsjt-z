@@ -2264,15 +2264,7 @@ void MainWindow::readSettings()
 
       // Status is asynchronous. A few bounded one-shot checks
       // avoid any permanent polling process.
-      // W7PP : capture saved Native FLEX RF watts
-      // synchronously while QSettings is still in Common.
-      // The delayed status callback executes after the active
-      // settings group has changed.
-      int const w7pp_native_flex_saved_watts =
-          m_settings->value(
-              "W7PPNativeFlexRfWatts", -1).toInt();
-
-      auto const refresh_native_flex_power_ui = [this, w7pp_native_flex_saved_watts] ()
+      auto const refresh_native_flex_power_ui = [this] ()
         {
           if (m_config.rig_name() != "Flex Native VITA-49")
             {
@@ -2299,10 +2291,11 @@ void MainWindow::readSettings()
                   "W7PPNativeFlexRfPower")
                   .toInt(&rf_ok);
 
-          int const changes_allowed =
-              qApp->property(
-                  "W7PPNativeFlexRfPowerChangesAllowed")
-                  .toInt(&allowed_ok);
+          // The changes-allowed value itself is unused below (see the
+          // DEVIATION note); only its presence still gates PowerReady.
+          qApp->property(
+              "W7PPNativeFlexRfPowerChangesAllowed")
+              .toInt(&allowed_ok);
 
           // W7PP : all three asynchronous FLEX power
           // properties must exist before PowerReady is latched.
@@ -2327,48 +2320,30 @@ void MainWindow::readSettings()
 
           ui->outAttenuation->setMaximum(max_watts);
 
-          bool const can_change =
-              allowed_ok && changes_allowed != 0;
-
-          // W7PP : restore last operator RF Watts choice.
-          // With no saved value, retain actual radio power.
-          int const saved_watts =
-              w7pp_native_flex_saved_watts >= 0
-                  ? qBound(
-                        0,
-                        w7pp_native_flex_saved_watts,
-                        max_watts)
-                  : current_watts;
-
-          int const displayed_watts =
-              can_change
-              ? saved_watts
-              : current_watts;
-
-          // Programmatic display restore must not become a user command.
+          // DEVIATION from W7PP: WSJT-Z's Configuration has no
+          // transceiver_tx_rf_power_level signal and TransceiverBase has
+          // no tx_rf_power_level virtual (already adjudicated for this
+          // port -- see the Task 6 report), so there is no way to carry
+          // an operator-chosen watts value to the radio. The donor
+          // restores the operator's last saved watts, enables the
+          // control, and invites the operator to "Set Native FLEX RF
+          // transmit power" -- correct only in a tree that can actually
+          // deliver that command. Doing the same here would show an
+          // enabled, confidently labelled transmit-power control that
+          // silently does nothing, displaying a wattage the radio was
+          // never actually set to. Transmit power is safety-adjacent: a
+          // control that appears live but isn't is worse than one that
+          // is plainly disabled. So always display the radio's own
+          // reported power (never the saved/operator value), keep the
+          // control disabled unconditionally, and say plainly that RF
+          // power control is unavailable.
           m_block_pwr_tooltip = true;
-          ui->outAttenuation->setValue(displayed_watts);
+          ui->outAttenuation->setValue(current_watts);
           m_block_pwr_tooltip = false;
 
-          // W7PP DEVIATION from donor: WSJT-Z's Configuration has no
-          // transceiver_tx_rf_power_level signal and TransceiverBase
-          // has no tx_rf_power_level virtual (already adjudicated for
-          // this port -- see Task 6 report). The saved watts value is
-          // still displayed and persisted here; it is simply not
-          // pushed back to the radio from this restore path.
-
-          ui->outAttenuation->setEnabled(can_change);
-
-          if (can_change)
-            {
-              ui->outAttenuation->setToolTip(
-                  tr("Set Native FLEX RF transmit power"));
-            }
-          else
-            {
-              ui->outAttenuation->setToolTip(
-                  tr("FLEX RF power changes are not allowed"));
-            }
+          ui->outAttenuation->setEnabled(false);
+          ui->outAttenuation->setToolTip(
+              tr("Native FLEX RF power control is not available in this build"));
 
           ui->outAttenuation->setProperty(
               "w7ppNativeFlexPowerReady", true);
@@ -2387,9 +2362,11 @@ void MainWindow::readSettings()
     }
   else
     {
-      // W7PP DEVIATION from donor: restore WSJT-Z's own stock range
-      // (450) here, not the donor's baseline (200), so that leaving
-      // Native FLEX does not regress the existing non-Flex maximum.
+      // DEVIATION from W7PP: restore WSJT-Z's own stock range (450)
+      // here, not the donor's baseline (200) -- the donor's value is
+      // only correct in its own, unmodified ui file. Taking 200
+      // verbatim would silently cut this control's pre-existing 45 dB
+      // range down to 20 dB for every non-Flex user, on every startup.
       ui->outAttenuation->setRange(0, 450);
       ui->outAttenuation->setInvertedAppearance(true);
       ui->outAttenuation->setInvertedControls(true);
@@ -3255,6 +3232,43 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
     m_flex_rx_audio = new_flex_rx_audio;
     // W7PP : follow Native FLEX RX selection immediately.
     ui->w7ppFlexRxGainWidget->setVisible(m_flex_rx_audio);
+    // DEVIATION from W7PP: the donor sets up the TX-audio widgets and
+    // repurposes outAttenuation into RF watts exactly once, in
+    // readSettings() at startup, and never reverses either change --
+    // correct only because the donor never lets rig_name() change
+    // without a restart. WSJT-Z reaches this same rig selection from
+    // the Settings dialog while running, so leaving Native FLEX here
+    // must undo both, or the operator is left with the Flex TX-audio
+    // slider still on screen, and outAttenuation still mis-ranged and
+    // un-inverted for a rig where this slider means audio dB, not
+    // watts -- silently driving the wrong TX audio level, not merely
+    // a cosmetic leftover.
+    if (m_config.rig_name() != "Flex Native VITA-49")
+      {
+        ui->w7ppFlexTxAudioLabel->setVisible(false);
+        ui->w7ppFlexTxAudioAttenuation->setVisible(false);
+        ui->w7ppFlexTxAudioScaleWidget->setVisible(false);
+
+        ui->outAttenuation->setProperty("w7ppNativeFlexPowerReady", false);
+
+        // Stock geometry, taken from mainwindow.ui's own outAttenuation
+        // defaults (not the donor's, which are 0-200 for its own,
+        // unmodified ui file).
+        ui->outAttenuation->setRange(0, 450);
+        ui->outAttenuation->setInvertedAppearance(true);
+        ui->outAttenuation->setInvertedControls(true);
+        ui->outAttenuation->setEnabled(true);
+        ui->outAttenuation->setToolTip(tr("Adjust Tx audio level"));
+
+        m_settings->beginGroup("Common");
+        int const restored_out_attenuation =
+            m_settings->value("OutAttenuation", 0).toInt();
+        m_settings->endGroup();
+
+        m_block_pwr_tooltip = true;
+        ui->outAttenuation->setValue(restored_out_attenuation);
+        m_block_pwr_tooltip = false;
+      }
     syncFlexVitaReceiver ();
     // Native Flex RX bypasses Windows soundcard input.
     // TCI also bypasses Windows soundcard input.
@@ -12491,12 +12505,15 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
           return;
         }
 
-      // W7PP DEVIATION from donor: WSJT-Z's Configuration has no
-      // transceiver_tx_rf_power_level signal and TransceiverBase has
-      // no tx_rf_power_level virtual (already adjudicated for this
-      // port -- see Task 6 report). There is currently no path from
-      // this control back to the radio; the watts value above is
-      // validated but intentionally not sent anywhere yet.
+      // DEVIATION from W7PP: WSJT-Z's Configuration has no
+      // transceiver_tx_rf_power_level signal and TransceiverBase has no
+      // tx_rf_power_level virtual (already adjudicated for this port --
+      // see the Task 6 report), so there is no path from this control
+      // back to the radio. The watts value above is validated (and the
+      // tooltip/focus handling above still runs) but is intentionally
+      // never sent anywhere -- readSettings() keeps this control
+      // unconditionally disabled for the same reason, so in practice
+      // this early return is reached only if that ever changes.
 
       // Do NOT fall through to SoundOutput attenuation.
       return;
