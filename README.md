@@ -2,94 +2,139 @@
   <img src="docs/wsjtz_icon.png" alt="WSJT-Z" width="160">
 </p>
 
-<h1 align="center">WSJT-Z</h1>
+<h1 align="center">WSJT-Z — Native FLEX (VITA-49)</h1>
 
 <p align="center">
-  A modified WSJT-X with extended automation, advanced filtering, and an enhanced decoder pipeline.
+  <strong>Talk to a FlexRadio directly. No SmartSDR. No DAX. No other client running.</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/sq9fve/wsjt-z/releases"><img src="https://img.shields.io/github/v/release/sq9fve/wsjt-z?include_prereleases&label=release" alt="Latest release"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0.txt"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
-  <a href="https://groups.io/g/WSJT-Z/topics"><img src="https://img.shields.io/badge/discuss-groups.io-orange" alt="groups.io"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platforms">
+  <img src="https://img.shields.io/badge/radio-FLEX--6000%20%2F%208000-orange" alt="Radios">
 </p>
 
 ---
 
-WSJT-Z is a fork of [WSJT-X](https://wsjt.sourceforge.io/wsjtx.html) by **Joe Taylor K1JT** and the WSJT Development Group. Initially developed as an automation project, WSJT-Z now focuses on extending the operating workflow with deeper filtering, smarter automation, and a more responsive UI — while keeping full compatibility with the upstream WSJT-X protocols.
+## What this is
 
-WSJT-Z supports **FT8**, **FT4**, **FT2**, **JT4 / JT9 / JT65**, **Q65**, **MSK144**, **WSPR**, **Echo** and **FreqCal**.
+A fork of [WSJT-Z](https://github.com/sq9fve/wsjt-z) that adds **Native FLEX** — a direct
+VITA-49 audio and control path to FlexRadio SIGNATURE radios.
 
-> ⚠️ **Always monitor your transceiver while using WSJT-Z**, unless unattended/automated operation is explicitly permitted by the regulations in your country.
+WSJT-Z registers itself with the radio as its own client over the SmartSDR TCP API, creates
+its own slice and its own DAX streams, and moves receive and transmit audio as raw VITA-49
+UDP packets. Nothing sits in between.
 
----
+## The point: nothing else has to be running
 
-## Discussion & support
+The conventional way to run WSJT-X with a Flex is a stack of moving parts — SmartSDR for the
+radio, DAX for virtual audio devices, a CAT shim for rig control, and an audio routing layer
+to connect them. Every one of those is a thing to configure, a thing to keep running, and a
+thing that can break.
 
-- **Groups.io (questions, comments, bug reports):** https://groups.io/g/WSJT-Z/topics
-- **Issue tracker:** https://github.com/sq9fve/wsjt-z/issues
-- **Changelog:** see [`changelog.txt`](changelog.txt) and the GitHub [Releases](https://github.com/sq9fve/wsjt-z/releases) page
+Native FLEX removes the entire stack:
 
-## Download
+|                          | Conventional          | Native FLEX     |
+| ------------------------ | --------------------- | --------------- |
+| SmartSDR running         | required              | **not needed**  |
+| DAX virtual audio driver | required              | **not needed**  |
+| Virtual audio routing    | required              | **not needed**  |
+| Separate CAT path        | required              | **not needed**  |
+| Sound-card configuration | required              | **not needed**  |
 
-Pre-built Windows installers and release notes are published on the GitHub **Releases** page:
+Select **`Flex Native VITA-49`** as the radio, pick your DAX channel, choose the radio when
+prompted, and that is the whole setup. WSJT-Z finds the radio by UDP discovery, opens the
+SmartSDR API, creates its slice, and streams audio itself.
 
-  → **https://github.com/sq9fve/wsjt-z/releases**
+It genuinely runs headless. In fact it works *better* with SmartSDR closed — a second client
+competes for the radio's limited client slots and for ownership of the transmit slice.
 
-## Features
+## How it works
 
-### Operating workflow
-- **Auto CQ** — call CQ unattended with configurable repeat count and band-rotation rules
-- **Auto Call** — automatically respond to filtered stations until a daily/QSO limit is reached
-- **Pounce mode** — lock onto a specific call until the QSO completes
-- **Priority call queue** — promote callsigns of interest to the front of the call list
-- **PSK-priority Auto Call** — optionally prefer stations already heard by PSK Reporter receivers on your band
-- **Auto Call Next** — chain QSOs without operator intervention
-- **Rapid RR73 short QSO** — double-click TX2 to skip to an RR73 reply for a no-report exchange
-- **Band-hopper** — schedule automatic band changes by time-of-day or activity
+```
+RX:  SmartSDR TCP :4992  +  DAX VITA-49 UDP :4995-5010
+       -> 48 kHz float32 -> 127-tap anti-alias FIR -> decimate 4:1
+       -> 12 kHz int16 -> dec_data.d2 -> decoder
 
-### Filtering & highlighting
-- **Ignored stations list** — silence specific calls or prefixes, with one-click save of the current list into the permanent list
-- **Prefix / state / continent / CQ-target filters** — include or exclude by call prefix, US state, continent, or directed-CQ target
-- **DXCC / Continent / CQ Zone / ITU Zone** worked-before alerts (per-band variants supported)
-- **New on band / new in mode / new for the year** highlighting
-- **LoTW user filter** — restrict to stations active on Logbook of the World
-- **Signal-strength threshold** filter
+TX:  Modulator -> software 48 kHz clock -> decimate 2:1
+       -> VITA-49 packetiser (24 kHz int16 big-endian)
+       -> UDP :4991 -> radio dax_tx stream
 
-### Decoder pipeline
-- **Multi-threaded FT8 decoder** (selectable: Auto, 1–12 threads) — substantial speed-ups on multi-core systems
-- **JTDX-derived FT8 enhancements** — additional decoding passes, OSD on `ndepth=2`, lowered sync thresholds for weak signals
-- **Early-decode dedup** — eliminates duplicate decodes within a single FT8 cycle in multi-threaded mode
-- **Stacked-call DXpedition support** — parses composite `RR73;` messages and replies to the tertiary caller
-- **Performance work in the C++ hot path** — cached filter lists, reduced regex compilation, gated debug logging, tuned Fortran release flags
+CAT: SmartSDR TCP API — slice, mode, frequency, PTT
+     + an independent safety monitor (PA power, SWR, voltage, temperature, ATU)
+```
 
-### Integration & UX
-- **QRZ.com lookup panel** — name, address, grid, biography
-- **DX Station Map** — world-map window plotting stations calling you and your logged QSOs
-- **Log rotation** — archive `wsjtx_log.adi` with a timestamped name from the File menu, or remotely via a UDP `RotateLog` message
-- **Audio alerts** — configurable per-event sounds
-- **PSK Reporter integration** — spotting plus band-activity feedback highlighting
-- **UDP control server** — optional inbound UDP `Configure` requests (mode/frequency/DX call, Auto-CQ/Auto-Call) for companion apps. Disabled by default; enabling it (**Accept UDP requests**) opens an unauthenticated control surface on all interfaces that can key your transmitter, so only enable it on a trusted network
-- **Larger Band Activity window** with improved column layout
-- **Custom alert rules**
-- **NA_VHF / EU_VHF contest flows** with associated UI tweaks
-- **Modernized highlighting model** with per-band overrides
+Receive is a *third, optional* audio source alongside standard sound-card input and TCI. It
+is completely inert unless you select the Native FLEX radio — no socket, no thread, no timer
+is created for anyone else.
 
-## Tools
+## Status
 
-The `tools/` directory contains helper scripts for project maintenance:
+Working and used on the air:
 
-- `tools/rebuild_usstate_db.py` — rebuilds `USState.db` (callsign → US state mapping used for state filtering) from the weekly FCC ULS amateur licensee dump. Stdlib-only Python; run with `--help` for options.
+- **Receive** — 24 decodes in a single FT8 cycle, DT 0.0–0.7, signals down to −23 dB
+- **Transmit** — confirmed two-way QSO (F4JZW → LW2EDM, 20 m FT8, RR73)
+- **CAT** — slice creation, frequency, mode, PTT, and a TX safety interlock that refuses to
+  key when the radio reports transmit is not permitted
 
-## License
+Verified on a **FLEX-8400M**, SmartSDR 3.1.0.4, firmware 4.2.20.41343, on macOS.
 
-Licensed under the **GNU General Public License v3** — see [`COPYING`](COPYING) and https://www.gnu.org/licenses/gpl-3.0.txt.
+### Known limitations
 
-The vast majority of the code is created and copyrighted by the WSJT Development Group, led by Joe Taylor K1JT, and licensed under the same terms. WSJT-Z extensions follow the same license.
+- **RF power control is unavailable.** WSJT-Z's base (WSJT-X 3.0.0) has no
+  `tx_rf_power_level` transceiver interface; the donor's base (3.0.2) does. The power slider
+  is deliberately disabled in Flex mode rather than left looking functional. Set power on the
+  radio.
+- **The radio selection is not persisted** — re-select it in *Settings → Radio* after a
+  restart.
+- **Radio discovery blocks the UI** for up to ~3.5 s while it searches.
+- **You need a free client slot.** If the radio reports *"maximum number of connected clients
+  has been reached"*, close another client (SmartSDR, or another API client) first.
+- Tested only on an 8000-series radio so far. The donor was developed against 6000-series.
 
-## Credits
+## Build (macOS)
 
-- **WSJT Development Group** — Joe Taylor K1JT and contributors — for WSJT-X, the upstream project this fork is built on
-- **JTDX team** — for the multi-threaded FT8 decoder enhancements that informed the WSJT-Z decoder pipeline
-- **JTSDK** — for the Windows build environment
-- **WSJT-Z contributors** — see the commit log
+```bash
+brew install qt@5 fftw boost hamlib libusb cmake gcc
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH=$(brew --prefix qt@5)
+cmake --build build -j8
+```
+
+Tests:
+
+```bash
+./build/tests/test_flex_socket_compat     # POSIX/Winsock shim
+./build/tests/test_flex_vita_receiver     # VITA-49 receive, against a fake radio
+./build/tests/test_native_flex_factory    # rig registration
+```
+
+`test_flex_vita_receiver` stands up a loopback SmartSDR handshake and feeds synthetic VITA-49
+packets, so the receive path is testable without hardware.
+
+## Portability
+
+The donor was written for Windows. Two files used raw Winsock directly and now go through
+`Transceiver/FlexSocketCompat.hpp`, which handles the three differences that actually matter
+rather than just the spelling:
+
+- **`SIGPIPE`** — on POSIX, writing to a socket the radio closed terminates the process.
+- **`EINTR`** — a blocking receive interrupted by a signal must be retried, not treated as fatal.
+- **`SO_RCVTIMEO` / `SO_RCVBUF`** — `timeval` rather than `DWORD`, and Linux doubles and
+  clamps the buffer, so the granted size is read back rather than assumed.
+
+## Credits and licence
+
+GPLv3. This work stands on three others:
+
+- **[WSJT-X](https://wsjt.sourceforge.io/wsjtx.html)** — Joe Taylor **K1JT** and the WSJT
+  Development Group.
+- **[WSJT-Z](https://github.com/sq9fve/wsjt-z)** — **SQ9FVE**. This fork tracks WSJT-Z 2.0.19;
+  its original README is preserved as [README-WSJT-Z.md](README-WSJT-Z.md).
+- **W7PP Mods** — Dick Hale **W7PP**, from *WSJT-X v3.0.2 W7PP Mods v1.05.8 RC3*. The Native
+  FLEX implementation is his. It is carried here as close to verbatim as portability allowed,
+  with every `W7PP` marker intact so it stays diffable against future releases. Deliberate
+  changes are marked `DEVIATION from W7PP` with the reason stated at the point of change.
+
+Design notes and the implementation plan are in
+[`docs/superpowers/`](docs/superpowers/).
