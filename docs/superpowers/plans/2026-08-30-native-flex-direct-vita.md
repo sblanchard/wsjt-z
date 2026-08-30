@@ -646,6 +646,20 @@ The handshake the receiver expects:
 2. Client sends `C3|sub slice all`, `C4|sub audio_stream all`, `C5|sub dax all`, `C6|client udpport <port>`, `C7|stream create type=dax_rx dax_channel=<n>`.
 3. Radio replies with a line containing `|stream <id> ... type=dax_rx ... dax_channel=<n> ... client_handle=<handle>`, which sets the stream id and flips `streaming()` true.
 
+**Number formats matter here and are easy to get wrong.** The donor parses
+every id with `std::stoul(text, nullptr, 0)` — base *auto-detect*. So:
+
+- The `H` line is sent as bare hex (`H1234abcd`); the receiver prepends `0x`
+  itself before parsing, so do **not** prefix it in the fake radio.
+- The stream id and `client_handle=` values inside the stream reply are parsed
+  as-is, so they **must** carry an explicit `0x` prefix. Without it,
+  `84000001` parses as decimal and `1234abcd` truncates at the first
+  non-digit — the receiver then treats every packet as belonging to a foreign
+  stream and silently drops it, and the test fails with zero packets accepted
+  and no error message.
+- `extractValue` terminates a value at space, CR, LF or `|`, so the reply's
+  fields must be space-separated.
+
 VITA-49 packet layout the receiver parses — word 0, big-endian:
 `bits 31-28` packet type (1 or 3), `bit 27` class-ID present, `bit 26` trailer present, `bits 23-22` TSI, `bits 21-20` TSF, `bits 19-16` packet count (mod 16), `bits 15-0` total packet size in 32-bit words. Word 1 is the stream ID. Payload is big-endian `float32` at 48 kHz.
 
@@ -761,12 +775,16 @@ void TestFlexVitaReceiver::init ()
                        && line.contains ("type=dax_rx"))
                 {
                   // Step 3: report the stream we just "created".
+                  //
+                  // The 0x prefixes are load-bearing: the receiver parses
+                  // these with std::stoul(text, nullptr, 0), so an unprefixed
+                  // value is read as decimal and the stream is rejected.
                   QByteArray reply = "S" +
                       QByteArray::number (FakeClientHandle, 16) +
-                      "|stream " + QByteArray::number (FakeStreamId, 16) +
+                      "|stream 0x" + QByteArray::number (FakeStreamId, 16) +
                       " type=dax_rx dax_channel=" +
                       QByteArray::number (FakeDaxChannel) +
-                      " client_handle=" +
+                      " client_handle=0x" +
                       QByteArray::number (FakeClientHandle, 16) + "\n";
 
                   client_->write (reply);
