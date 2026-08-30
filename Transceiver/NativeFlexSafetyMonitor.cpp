@@ -1141,8 +1141,12 @@ struct NativeFlexSafetyMonitor::Impl
       // down from here instead -- shutdown() reliably unblocks
       // select() on both platforms without invalidating the
       // descriptor -- and leave the actual close() to the worker
-      // thread itself, at the closeSockets() call sites already in
-      // fail() and at the end of run().
+      // thread itself. Both branches of the select loop in run()
+      // now break out to the shared tail cleanup instead of
+      // returning early, so the worker always reaches the
+      // closeSockets() call sites already in fail() and at the end
+      // of run() -- exactly one close() per descriptor, whether the
+      // worker exits via an error or via this stop() request.
       SOCKET const tcp = tcpSocket.load();
       SOCKET const udp = udpSocket.load();
 
@@ -1504,7 +1508,7 @@ struct NativeFlexSafetyMonitor::Impl
                 fail("Independent safety monitor select failed.");
               }
 
-            return;
+            break;
           }
 
 
@@ -1532,7 +1536,7 @@ struct NativeFlexSafetyMonitor::Impl
                     fail("Independent safety monitor TCP connection lost.");
                   }
 
-                return;
+                break;
               }
 
             consumeTcp(

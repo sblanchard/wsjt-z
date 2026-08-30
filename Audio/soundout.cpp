@@ -428,7 +428,15 @@ void SoundOutput::nativeFlexReportTxError (QString const& message)
       // 5.33 ms for the rest of it. Keep counting -- cheap -- and log
       // rather than pop another dialog, so the extent of the failure
       // is still diagnosable from the log.
-      LOG_DEBUG (
+      //
+      // DEVIATION from W7PP: use LOG_WARN, not LOG_DEBUG. The default
+      // sink filter sets the SYSLOG channel floor to trivial::info
+      // (see WSJTXLogging.cpp default_log_config()), so a debug-level
+      // record is silently dropped -- the same invisibility rejected
+      // for CAT_TRACE in the dax_tx fix -- which would make the
+      // dialog's claim that "further identical failures this
+      // transmission will be logged, not shown" false out of the box.
+      LOG_WARN (
           QString {"Native FLEX TX error suppressed (#%1 this transmission): %2"}
               .arg (m_native_flex_tx_error_count)
               .arg (message));

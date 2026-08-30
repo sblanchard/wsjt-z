@@ -2250,8 +2250,15 @@ void Configuration::impl::read_settings ()
 
 void Configuration::impl::update_w7pp_flex_rx_controls ()
 {
+  // DEVIATION from W7PP: gate on the exact rig name, matching
+  // Configuration::flex_native_rx(). Without this, a stored
+  // W7PPFlexNativeRx=true preference greys the sound-input combo box
+  // and relabels it "Windows Input (not used):" even when the
+  // selected rig is not the Native FLEX backend, leaving a non-Flex
+  // operator with no way to pick an audio input device.
   bool const native =
       !(is_tci_ && tci_audio_)
+      && rig_params_.rig_name == "Flex Native VITA-49"
       && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1;
 
   ui_->sound_input_label->setText (
@@ -2628,11 +2635,28 @@ void Configuration::impl::set_rig_invariants ()
   ui_->w7pp_flex_dax_channel_combo_box->setEnabled (
       is_flex_native_rig
       && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1);
+
+  // DEVIATION from W7PP: refresh the sound-input combo box/label and
+  // DAX-channel controls whenever the rig invariants are recomputed
+  // (in particular when the rig selection itself changes), not only
+  // when the DAX-RX method combo box changes or at read_settings().
+  // Otherwise switching away from the Flex rig leaves the sound-input
+  // controls greyed and mislabelled until the dialog is reopened.
+  update_w7pp_flex_rx_controls ();
 }
 
 bool Configuration::impl::validate ()
 {
-  if (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0 && ui_->sound_input_combo_box->currentIndex () < 0
+  // DEVIATION from W7PP: gate the Native FLEX DAX-RX skip on the exact
+  // rig name, matching Configuration::flex_native_rx(). Without this,
+  // a stored W7PPFlexNativeRx=true preference silently skips the
+  // sound-input device checks below even when the selected rig is not
+  // the Native FLEX backend, leaving a non-Flex operator with no
+  // diagnostic for a missing audio input device.
+  bool const is_flex_native_rig =
+      (rig_params_.rig_name == "Flex Native VITA-49");
+
+  if ((!is_flex_native_rig || ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0) && ui_->sound_input_combo_box->currentIndex () < 0
       && next_audio_input_device_.isNull ())
     {
       find_tab (ui_->sound_input_combo_box);
@@ -2640,7 +2664,7 @@ bool Configuration::impl::validate ()
       return false;
     }
 
-  if (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0 && ui_->sound_input_channel_combo_box->currentIndex () < 0
+  if ((!is_flex_native_rig || ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0) && ui_->sound_input_channel_combo_box->currentIndex () < 0
       && next_audio_input_device_.isNull ())
     {
       find_tab (ui_->sound_input_combo_box);
