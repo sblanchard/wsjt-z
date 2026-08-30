@@ -516,7 +516,15 @@ private:
   void write_settings ();
 
   void find_audio_devices ();
-  void update_w7pp_flex_rx_controls ();
+  // rig_name is the rig to reflect in these controls: pass the live
+  // rig combo box text (ui_->rig_combo_box->currentText ()) from
+  // callers that run while the Settings dialog is open and the
+  // operator may have changed the rig selection but not yet clicked
+  // OK; pass rig_params_.rig_name from callers that run before the
+  // rig combo box has been set to the loaded/accepted rig (e.g.
+  // read_settings(), before its call to
+  // ui_->rig_combo_box->setCurrentText()).
+  void update_w7pp_flex_rx_controls (QString const& rig_name);
   QAudioDeviceInfo find_audio_device (QAudio::Mode, QComboBox *, QString const& device_name);
   void load_audio_devices (QAudio::Mode, QComboBox *, QAudioDeviceInfo *);
   void update_audio_channels (QComboBox const *, int, QComboBox *, bool);
@@ -1529,7 +1537,7 @@ Configuration::impl::impl (Configuration * self, QNetworkAccessManager * network
   connect (ui_->w7pp_flex_rx_method_combo_box,
            static_cast<void (QComboBox::*)(int)> (&QComboBox::currentIndexChanged),
            this,
-           [this] (int) { update_w7pp_flex_rx_controls (); });
+           [this] (int) { update_w7pp_flex_rx_controls (ui_->rig_combo_box->currentText ()); });
 
   // set up dynamic loading of audio devices
   connect (ui_->sound_input_combo_box, &LazyFillComboBox::about_to_show_popup, [this] () {
@@ -1830,7 +1838,10 @@ void Configuration::impl::initialize_models ()
   ui_->tci_audio_check_box->setChecked (tci_audio_);
   ui_->w7pp_flex_rx_method_combo_box->setCurrentIndex (w7pp_flex_native_rx_ ? 1 : 0);
   ui_->w7pp_flex_dax_channel_combo_box->setCurrentIndex (w7pp_flex_dax_channel_ - 1);
-  update_w7pp_flex_rx_controls ();
+  // ui_->rig_combo_box has not been set from rig_params_.rig_name yet
+  // at this point in read_settings() (that happens further below), so
+  // pass it explicitly rather than reading the not-yet-updated combo.
+  update_w7pp_flex_rx_controls (rig_params_.rig_name);
   ui_->cbSuperFox->setChecked(bSuperFox_);
   ui_->cbContestName->setChecked(Individual_Contest_Name_);
   ui_->gbSpecialOpActivity->setChecked(bSpecialOp_);
@@ -2248,7 +2259,7 @@ void Configuration::impl::read_settings ()
   alertCmdLine_ = settings_->value("alertCmdLine").toString();
 }
 
-void Configuration::impl::update_w7pp_flex_rx_controls ()
+void Configuration::impl::update_w7pp_flex_rx_controls (QString const& rig_name)
 {
   // DEVIATION from W7PP: gate on the exact rig name, matching
   // Configuration::flex_native_rx(). Without this, a stored
@@ -2256,9 +2267,14 @@ void Configuration::impl::update_w7pp_flex_rx_controls ()
   // and relabels it "Windows Input (not used):" even when the
   // selected rig is not the Native FLEX backend, leaving a non-Flex
   // operator with no way to pick an audio input device.
+  //
+  // rig_name reflects the rig the operator has currently selected in
+  // the (possibly still open) Settings dialog, not necessarily the
+  // last-accepted rig -- see this function's callers and the
+  // parameter's documentation in the class declaration.
   bool const native =
       !(is_tci_ && tci_audio_)
-      && rig_params_.rig_name == "Flex Native VITA-49"
+      && rig_name == "Flex Native VITA-49"
       && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1;
 
   ui_->sound_input_label->setText (
@@ -2642,7 +2658,10 @@ void Configuration::impl::set_rig_invariants ()
   // when the DAX-RX method combo box changes or at read_settings().
   // Otherwise switching away from the Flex rig leaves the sound-input
   // controls greyed and mislabelled until the dialog is reopened.
-  update_w7pp_flex_rx_controls ();
+  // Pass the live rig combo box text (rig) rather than
+  // rig_params_.rig_name, since set_rig_invariants() runs precisely
+  // when the operator's rig selection may have just changed.
+  update_w7pp_flex_rx_controls (rig);
 }
 
 bool Configuration::impl::validate ()
@@ -2653,8 +2672,14 @@ bool Configuration::impl::validate ()
   // sound-input device checks below even when the selected rig is not
   // the Native FLEX backend, leaving a non-Flex operator with no
   // diagnostic for a missing audio input device.
+  //
+  // validate() runs from accept() *before* rig_params_ is updated
+  // from the dialog (that happens later, in accept()), so it must
+  // read the live rig combo box selection here rather than
+  // rig_params_.rig_name -- otherwise this would see the previously
+  // accepted rig instead of the one the operator just selected.
   bool const is_flex_native_rig =
-      (rig_params_.rig_name == "Flex Native VITA-49");
+      (ui_->rig_combo_box->currentText () == "Flex Native VITA-49");
 
   if ((!is_flex_native_rig || ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 0) && ui_->sound_input_combo_box->currentIndex () < 0
       && next_audio_input_device_.isNull ())
