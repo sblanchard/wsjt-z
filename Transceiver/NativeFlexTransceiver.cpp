@@ -253,6 +253,58 @@ void NativeFlexTransceiver::capture_dax_tx_stream(
       return;
     }
 
+  /*
+   * DEVIATION from W7PP: only accept a dax_tx stream that belongs to
+   * THIS API client.
+   *
+   * The status-handle test above is not an ownership test: the "S<handle>|"
+   * prefix is the handle of the subscriber being notified - i.e. always our
+   * own - so it matches for every client's stream. Without the check below
+   * we latch the FIRST dax_tx stream the radio mentions, which on a radio
+   * that also has SmartSDR (or any other client) connected is somebody
+   * else's stream. We then send our TX audio into their stream while our
+   * own transmit slice receives nothing: the radio keys and emits an
+   * unmodulated carrier, so the signal looks present on a waterfall but is
+   * undecodable. Observed on a FLEX-8400M with SmartSDR-Mac connected.
+   *
+   * FlexVitaReceiver already does exactly this on the RX side ("Accept only
+   * the stream belonging to THIS API client handle"); the TX side was
+   * missing the equivalent guard.
+   */
+  {
+    int const owner_pos = line.indexOf("client_handle=");
+
+    if (owner_pos >= 0)
+      {
+        int const owner_start =
+            owner_pos + static_cast<int>(qstrlen("client_handle="));
+
+        int owner_end =
+            line.indexOf(' ', owner_start);
+
+        if (owner_end < 0)
+          {
+            owner_end = line.size();
+          }
+
+        bool owner_ok = false;
+
+        quint32 const owner_handle =
+            QString::fromLatin1(
+                line.mid(
+                    owner_start,
+                    owner_end - owner_start))
+                .trimmed()
+                .toUInt(&owner_ok, 16);
+
+        if (!owner_ok
+            || owner_handle != client_handle_)
+          {
+            return;
+          }
+      }
+  }
+
   QList<QByteArray> const markers {
       "|audio_stream ",
       "|stream ",
