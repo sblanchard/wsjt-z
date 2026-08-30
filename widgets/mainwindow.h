@@ -32,6 +32,7 @@
 #include "MultiGeometryWidget.hpp"
 #include "NonInheritingProcess.hpp"
 #include "Audio/AudioDevice.hpp"
+#include "Transceiver/FlexVitaReceiver.hpp"
 #include "commons.h"
 #include "Radio.hpp"
 #include "models/Modes.hpp"
@@ -156,6 +157,11 @@ public slots:
   void fastPick(int x0, int x1, int y);
 
 private:
+  // W7PP native Flex 12 kHz decoder-buffer ingress.
+  void flexDataSink (FlexVitaReceiver::DecoderBlock const& samples);
+  void syncFlexVitaReceiver ();
+  void verifyFlexVitaStart (int generation, quint64 baselinePackets, int checksRemaining = 20);
+  void armFlexVitaWatchdog (int generation);
   void change_layout (std::size_t) override;
   void keyPressEvent (QKeyEvent *) override;
   void closeEvent(QCloseEvent *) override;
@@ -591,6 +597,9 @@ private:
   QString m_lastCallsign;
   Frequency  m_dialFreqRxWSPR;  // best guess at WSPR QRG
 
+  // W7PP optional third RX source.
+  // Standard SoundInput and TCI remain independent.
+  FlexVitaReceiver * m_flexVitaReceiver;
   Detector * m_detector;
   unsigned m_FFTSize;
   SoundInput * m_soundInput;
@@ -696,6 +705,13 @@ private:
   bool    m_tci_mod_active;
   bool    m_tci;
   bool    m_tci_audio;
+  bool    m_flex_rx_audio;  // optional native Flex RX
+  qint64  m_flex_last_period_msec;
+  int     m_flex_vita_dax_channel {0};
+  int     m_flex_vita_start_attempt {0};
+  int     m_flex_vita_generation {0};
+  bool    m_flex_vita_watchdog_armed {false};
+  quint64 m_flex_vita_watchdog_packets {0};
   bool    inSettings = false;
   bool    m_diskData;
   bool    m_loopall;

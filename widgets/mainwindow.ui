@@ -4685,6 +4685,132 @@ list. The list can be maintained in Settings (F2).</string>
             </property>
            </widget>
           </item>
+          <!-- W7PP : Native FLEX TX Audio attenuation -->
+          <item>
+           <widget class="QLabel" name="w7ppFlexTxAudioLabel">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <property name="text">
+             <string>Audio</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignCenter</set>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QSlider" name="w7ppFlexTxAudioAttenuation">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Adjust Native FLEX TX audio level</string>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>200</number>
+            </property>
+            <property name="value">
+             <number>0</number>
+            </property>
+            <property name="orientation">
+             <enum>Qt::Vertical</enum>
+            </property>
+            <property name="invertedAppearance">
+             <bool>true</bool>
+            </property>
+            <property name="invertedControls">
+             <bool>true</bool>
+            </property>
+            <property name="tickPosition">
+             <enum>QSlider::TicksRight</enum>
+            </property>
+            <property name="tickInterval">
+             <number>10</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QWidget" name="w7ppFlexTxAudioScaleWidget" native="true">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <layout class="QVBoxLayout" name="w7ppFlexTxAudioScaleLayout">
+             <property name="spacing">
+              <number>0</number>
+             </property>
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="w7ppFlexTxAudioScale0">
+               <property name="text"><string>0 dB</string></property>
+               <property name="alignment"><set>Qt::AlignLeft|Qt::AlignTop</set></property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="w7ppFlexTxAudioSpacer1">
+               <property name="orientation"><enum>Qt::Vertical</enum></property>
+               <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="w7ppFlexTxAudioScale5">
+               <property name="text"><string>-5 dB</string></property>
+               <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="w7ppFlexTxAudioSpacer2">
+               <property name="orientation"><enum>Qt::Vertical</enum></property>
+               <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="w7ppFlexTxAudioScale10">
+               <property name="text"><string>-10 dB</string></property>
+               <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="w7ppFlexTxAudioSpacer3">
+               <property name="orientation"><enum>Qt::Vertical</enum></property>
+               <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="w7ppFlexTxAudioScale15">
+               <property name="text"><string>-15 dB</string></property>
+               <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="w7ppFlexTxAudioSpacer4">
+               <property name="orientation"><enum>Qt::Vertical</enum></property>
+               <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="w7ppFlexTxAudioScale20">
+               <property name="text"><string>-20 dB</string></property>
+               <property name="alignment"><set>Qt::AlignLeft|Qt::AlignBottom</set></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
           <item>
            <widget class="QSlider" name="outAttenuation">
             <property name="sizePolicy">
@@ -4756,6 +4882,86 @@ list. The list can be maintained in Settings (F2).</string>
             </property>
            </widget>
           </item>
+          <!-- W7PP BEGIN NATIVE FLEX RX GAIN -->
+          <item>
+           <widget class="QWidget" name="w7ppFlexRxGainWidget" native="true">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Native FLEX receive level. Adjust while watching the WSJT receive dB meter. 0 dB preserves the current Native VITA level.</string>
+            </property>
+            <layout class="QVBoxLayout" name="w7ppFlexRxGainLayout">
+             <property name="spacing">
+              <number>1</number>
+             </property>
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="w7ppFlexRxGainTitle">
+               <property name="text">
+                <string>RX Gain</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QSlider" name="w7ppFlexRxGainSlider">
+               <property name="toolTip">
+                <string>Native FLEX receive gain. 0 dB is unchanged; move downward to attenuate receive audio.</string>
+               </property>
+               <property name="minimum">
+                <number>-60</number>
+               </property>
+               <property name="maximum">
+                <number>0</number>
+               </property>
+               <property name="singleStep">
+                <number>1</number>
+               </property>
+               <property name="pageStep">
+                <number>5</number>
+               </property>
+               <property name="value">
+                <number>0</number>
+               </property>
+               <property name="orientation">
+                <enum>Qt::Vertical</enum>
+               </property>
+               <property name="tickPosition">
+                <enum>QSlider::TicksRight</enum>
+               </property>
+               <property name="tickInterval">
+                <number>10</number>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="w7ppFlexRxGainValue">
+               <property name="text">
+                <string>0 dB</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignCenter</set>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <!-- W7PP END NATIVE FLEX RX GAIN -->
          </layout>
         </item>
        </layout>

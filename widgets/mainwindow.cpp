@@ -40,6 +40,8 @@
 #include <QActionGroup>
 #include <QSplashScreen>
 #include <QUdpSocket>
+#include <QNetworkInterface>
+#include <QElapsedTimer>
 #include <QAbstractItemView>
 #include <QInputDialog>
 #if QT_VERSION >= QT_VERSION_CHECK (5, 15, 0)
@@ -88,6 +90,7 @@
 #include "Radio.hpp"
 #include "models/Bands.hpp"
 #include "Transceiver/TransceiverFactory.hpp"
+#include "Transceiver/NativeFlexTransceiver.hpp"
 #include "models/StationList.hpp"
 #include "validators/LiveFrequencyValidator.hpp"
 #include "Network/MessageClient.hpp"
@@ -340,6 +343,7 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   m_logDlg (new LogQSO (program_title (), m_settings, &m_config, &m_logBook, nullptr)),
   m_lastDialFreq {0},
   m_dialFreqRxWSPR {0},
+  m_flexVitaReceiver {new FlexVitaReceiver},
   m_detector {new Detector {RX_SAMPLE_RATE, double(NTMAX), downSampleFactor}},
   m_FFTSize {6192 / 2},         // conservative value to avoid buffer overruns
   m_soundInput {new SoundInput},
@@ -384,6 +388,8 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   m_tci_mod_active {false},
   m_tci {false},
   m_tci_audio {false},
+  m_flex_rx_audio {false},  // W7PP Flex RX disabled by default
+  m_flex_last_period_msec {-1},
   m_diskData {false},
   m_loopall {false},
   m_txFirst {false},
@@ -619,6 +625,61 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   connect (m_soundOutput, &SoundOutput::error, &m_config, &Configuration::invalidate_audio_output_device);
   // connect (m_soundOutput, &SoundOutput::status, this, &MainWindow::showStatusMessage);
   connect (this, &MainWindow::outAttenuationChanged, m_soundOutput, &SoundOutput::setAttenuation);
+  // W7PP : Native FLEX TX audio level is independent
+  // of the RF Watts control. SoundOutput::m_volume is also used
+  // by the Native FLEX VITA PCM packetizer.
+  connect (ui->w7ppFlexTxAudioAttenuation,
+           &QSlider::valueChanged,
+           this,
+           [this] (int value)
+           {
+             if (m_config.rig_name() != "Flex Native VITA-49")
+               {
+                 return;
+               }
+
+             int const bounded = qBound(0, value, 200);
+             qreal const attenuation_db = bounded / 10.0;
+
+             if (ui->w7ppFlexTxAudioAttenuation->hasFocus())
+               {
+                 QString const shown =
+                     bounded
+                     ? QString::number(-attenuation_db, 'f', 1)
+                     : QStringLiteral("0");
+
+                 QToolTip::showText(
+                     QCursor::pos(),
+                     tr("Native FLEX TX audio %1 dB").arg(shown),
+                     ui->w7ppFlexTxAudioAttenuation);
+               }
+
+             Q_EMIT outAttenuationChanged(attenuation_db);
+           });
+  // W7PP : Native FLEX RX Gain UI readout and immediate persistence.
+  connect (ui->w7ppFlexRxGainSlider, &QSlider::valueChanged,
+           this,
+           [this] (int value)
+           {
+             ui->w7ppFlexRxGainValue->setText(
+                 QStringLiteral("%1 dB").arg(value));
+
+             // Persist immediately into the same Common group
+             // used by normal save and startup restore.
+             if (m_settings)
+               {
+                 QSettings w7ppRxGainSettings(
+                     m_settings->fileName(),
+                     QSettings::IniFormat);
+
+                 w7ppRxGainSettings.beginGroup("Common");
+                 w7ppRxGainSettings.setValue(
+                     "FlexNativeRxGainDb",
+                     value);
+                 w7ppRxGainSettings.endGroup();
+                 w7ppRxGainSettings.sync();
+               }
+           });
   connect (&m_audioThread, &QThread::finished, m_soundOutput, &QObject::deleteLater);
 
   // hook up Modulator slots and disposal
@@ -644,6 +705,26 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   // hook up the detector signals, slots and disposal
   connect (this, &MainWindow::FFTSize, m_detector, &Detector::setBlockSize);
   connect(m_detector, &Detector::framesWritten, this, &MainWindow::dataSink);
+
+  // W7PP native Flex receiver runs its network/VITA work on its own
+  // worker thread. Never touch dec_data or GUI state from that thread.
+  //
+  // Copy the completed 12 kHz block and queue it onto MainWindow's
+  // Qt thread. The receiver is still disabled unless explicitly
+  // selected in a later step.
+  m_flexVitaReceiver->setAudioCallback(
+      [this] (FlexVitaReceiver::DecoderBlock const& block)
+      {
+        auto queuedBlock = block;
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, queuedBlock] ()
+            {
+              flexDataSink(queuedBlock);
+            },
+            Qt::QueuedConnection);
+      });
   connect (&m_audioThread, &QThread::finished, m_detector, &QObject::deleteLater);
 
   // setup the waterfall
@@ -1227,13 +1308,30 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   m_tci = m_config.is_tci();
   m_tci_audio = (m_config.tci_audio() && m_config.is_tci());
 
-  if (!m_tci_audio) {
+  // W7PP saved Audio-tab RX selection.
+  // Standard Windows/DAX remains the default.
+  m_flex_rx_audio = (!m_tci_audio && m_config.flex_native_rx ());
+  // W7PP : gain control belongs only to Native FLEX RX.
+  ui->w7ppFlexRxGainWidget->setVisible(m_flex_rx_audio);
+
+  // RX INPUT SELECTION:
+  //   Flex native -> no SoundInput RX
+  //   TCI         -> existing TCI path
+  //   otherwise   -> standard WSJT-X SoundInput
+  // : saved Native VITA selection starts its stream now.
+  syncFlexVitaReceiver ();
+  if (!m_tci_audio && !m_flex_rx_audio) {
     if (!m_config.audio_input_device ().isNull ())
       {
         Q_EMIT startAudioInputStream (m_config.audio_input_device ()
                                       , m_rx_audio_buffer_frames
                                       , m_detector, m_downSampleFactor, m_config.audio_input_channel ());
       }
+  }
+
+  // TX remains the standard WSJT-X audio path for native Flex RX.
+  // Only TCI continues to own its separate network TX path.
+  if (!m_tci_audio) {
     if (!m_config.audio_output_device ().isNull ())
       {
         Q_EMIT initializeAudioOutputStream (m_config.audio_output_device ()
@@ -1534,6 +1632,8 @@ void MainWindow::on_the_minute ()
 //--------------------------------------------------- MainWindow destructor
 MainWindow::~MainWindow()
 {
+  delete m_flexVitaReceiver;
+  m_flexVitaReceiver = nullptr;
   if(m_astroWidget) m_astroWidget.reset ();
   auto fname {QDir::toNativeSeparators(m_config.writeable_data_dir ().absoluteFilePath ("wsjtx_wisdom.dat"))};
   fftwf_export_wisdom_to_filename (fname.toLocal8Bit ());
@@ -1643,7 +1743,43 @@ void MainWindow::writeSettings()
 // m_settings->setValue("ShMsgs",m_bShMsgs);
   m_settings->setValue("SWL",ui->cbSWL->isChecked());
   m_settings->setValue ("DialFreq", QVariant::fromValue(m_lastMonitoredFrequency));
-  m_settings->setValue("OutAttenuation", ui->outAttenuation->value ());
+
+  // W7PP :
+  // Save WSJT's selected dial ONLY for Flex Native VITA-49.
+  // Stock DialFreq above remains completely unchanged.
+  if (m_config.rig_name() == "Flex Native VITA-49"
+      && m_freqNominal)
+    {
+      m_settings->setValue(
+          "W7PPNativeFlexDialFreq",
+          QVariant::fromValue(m_freqNominal));
+    }
+
+  // W7PP : Native FLEX RF power is not audio attenuation.
+  // Never overwrite the stock OutAttenuation setting with watts.
+  if (m_config.rig_name() == "Flex Native VITA-49")
+    {
+      // W7PP : save Native FLEX TX Audio independently.
+      m_settings->setValue(
+          "W7PPNativeFlexTxAudioAttenuation",
+          ui->w7ppFlexTxAudioAttenuation->value());
+
+      if (ui->outAttenuation->property(
+              "w7ppNativeFlexPowerReady").toBool())
+        {
+          m_settings->setValue(
+              "W7PPNativeFlexRfWatts",
+              ui->outAttenuation->value());
+        }
+    }
+  else
+    {
+      m_settings->setValue(
+          "OutAttenuation",
+          ui->outAttenuation->value());
+    }
+  // W7PP : remember Native FLEX RX operator gain setting.
+  m_settings->setValue("FlexNativeRxGainDb", ui->w7ppFlexRxGainSlider->value());
   m_settings->setValue("NoSuffix",m_noSuffix);
   m_settings->setValue("GUItab",ui->tabWidget->currentIndex());
   m_settings->setValue("OutBufSize",outBufSize);
@@ -2040,6 +2176,21 @@ void MainWindow::readSettings()
   ui->sbTR_FST4W->setValue (m_settings->value ("TRPeriod_FST4W", 15).toInt());
   m_lastMonitoredFrequency = m_settings->value ("DialFreq",
     QVariant::fromValue<Frequency> (default_frequency)).value<Frequency> ();
+
+  // W7PP :
+  // Supply saved startup frequency ONLY to Flex Native VITA-49.
+  if (m_config.rig_name() == "Flex Native VITA-49")
+    {
+      Frequency const native_flex_startup_frequency =
+          m_settings->value(
+              "W7PPNativeFlexDialFreq",
+              QVariant::fromValue<Frequency>(0))
+              .value<Frequency>();
+
+      NativeFlexTransceiver::set_startup_frequency(
+          native_flex_startup_frequency);
+    }
+
   ui->WSPRfreqSpinBox->setValue(0); // ensure a change is signaled
   ui->WSPRfreqSpinBox->setValue(m_settings->value("WSPRfreq",1500).toInt());
   ui->TxFreqSpinBox->setValue(0); // ensure a change is signaled
@@ -2063,7 +2214,197 @@ void MainWindow::readSettings()
   ui->band_hopping_group_box->setChecked (m_settings->value ("BandHopping", false).toBool());
   // setup initial value of tx attenuator
   m_block_pwr_tooltip = true;
-  ui->outAttenuation->setValue (m_settings->value ("OutAttenuation", 0).toInt ());
+
+  // W7PP :
+  // Native FLEX uses this physical control as actual RF watts.
+  // Do not restore stock OutAttenuation into the watts control.
+  if (m_config.rig_name() == "Flex Native VITA-49")
+    {
+      // W7PP : independent Native FLEX TX Audio control.
+      ui->w7ppFlexTxAudioLabel->setVisible(true);
+      ui->w7ppFlexTxAudioAttenuation->setVisible(true);
+      ui->w7ppFlexTxAudioScaleWidget->setVisible(true);
+
+      ui->w7ppFlexTxAudioAttenuation->setRange(0, 200);
+      ui->w7ppFlexTxAudioAttenuation->setInvertedAppearance(true);
+      ui->w7ppFlexTxAudioAttenuation->setInvertedControls(true);
+
+      int const native_flex_audio_attenuation =
+          qBound(
+              0,
+              m_settings->value(
+                  "W7PPNativeFlexTxAudioAttenuation",
+                  0).toInt(),
+              200);
+
+      ui->w7ppFlexTxAudioAttenuation->setValue(
+          native_flex_audio_attenuation);
+
+      // Establish SoundOutput::m_volume even when restored value
+      // is zero and QSlider::valueChanged therefore does not fire.
+      Q_EMIT outAttenuationChanged(
+          native_flex_audio_attenuation / 10.0);
+
+      ui->outAttenuation->setProperty(
+          "w7ppNativeFlexPowerReady", false);
+
+      // Keep the control disabled until the radio itself reports
+      // both PA capability and current rfpower.
+      ui->outAttenuation->setEnabled(false);
+      ui->outAttenuation->setRange(0, 100);
+
+      // Watts are intuitive: maximum at top, zero at bottom.
+      ui->outAttenuation->setInvertedAppearance(false);
+      ui->outAttenuation->setInvertedControls(false);
+
+      ui->outAttenuation->setToolTip(
+          tr("Waiting for FLEX RF power status"));
+
+      ui->outAttenuation->setValue(0);
+
+      // Status is asynchronous. A few bounded one-shot checks
+      // avoid any permanent polling process.
+      // W7PP : capture saved Native FLEX RF watts
+      // synchronously while QSettings is still in Common.
+      // The delayed status callback executes after the active
+      // settings group has changed.
+      int const w7pp_native_flex_saved_watts =
+          m_settings->value(
+              "W7PPNativeFlexRfWatts", -1).toInt();
+
+      auto const refresh_native_flex_power_ui = [this, w7pp_native_flex_saved_watts] ()
+        {
+          if (m_config.rig_name() != "Flex Native VITA-49")
+            {
+              return;
+            }
+
+          if (ui->outAttenuation->property(
+                  "w7ppNativeFlexPowerReady").toBool())
+            {
+              return;
+            }
+
+          bool max_ok = false;
+          bool rf_ok = false;
+          bool allowed_ok = false;
+
+          int const max_watts =
+              qApp->property(
+                  "W7PPNativeFlexMaxInternalPaPower")
+                  .toInt(&max_ok);
+
+          int const rf_level =
+              qApp->property(
+                  "W7PPNativeFlexRfPower")
+                  .toInt(&rf_ok);
+
+          int const changes_allowed =
+              qApp->property(
+                  "W7PPNativeFlexRfPowerChangesAllowed")
+                  .toInt(&allowed_ok);
+
+          // W7PP : all three asynchronous FLEX power
+          // properties must exist before PowerReady is latched.
+          if (!max_ok
+              || max_watts <= 0
+              || !rf_ok
+              || rf_level < 0
+              || rf_level > 100
+              || !allowed_ok)
+            {
+              return;
+            }
+
+          int const current_watts =
+              qBound(
+                  0,
+                  qRound(
+                      double(rf_level)
+                      * double(max_watts)
+                      / 100.0),
+                  max_watts);
+
+          ui->outAttenuation->setMaximum(max_watts);
+
+          bool const can_change =
+              allowed_ok && changes_allowed != 0;
+
+          // W7PP : restore last operator RF Watts choice.
+          // With no saved value, retain actual radio power.
+          int const saved_watts =
+              w7pp_native_flex_saved_watts >= 0
+                  ? qBound(
+                        0,
+                        w7pp_native_flex_saved_watts,
+                        max_watts)
+                  : current_watts;
+
+          int const displayed_watts =
+              can_change
+              ? saved_watts
+              : current_watts;
+
+          // Programmatic display restore must not become a user command.
+          m_block_pwr_tooltip = true;
+          ui->outAttenuation->setValue(displayed_watts);
+          m_block_pwr_tooltip = false;
+
+          // W7PP DEVIATION from donor: WSJT-Z's Configuration has no
+          // transceiver_tx_rf_power_level signal and TransceiverBase
+          // has no tx_rf_power_level virtual (already adjudicated for
+          // this port -- see Task 6 report). The saved watts value is
+          // still displayed and persisted here; it is simply not
+          // pushed back to the radio from this restore path.
+
+          ui->outAttenuation->setEnabled(can_change);
+
+          if (can_change)
+            {
+              ui->outAttenuation->setToolTip(
+                  tr("Set Native FLEX RF transmit power"));
+            }
+          else
+            {
+              ui->outAttenuation->setToolTip(
+                  tr("FLEX RF power changes are not allowed"));
+            }
+
+          ui->outAttenuation->setProperty(
+              "w7ppNativeFlexPowerReady", true);
+        };
+
+      QTimer::singleShot(
+          500, this, refresh_native_flex_power_ui);
+      QTimer::singleShot(
+          1500, this, refresh_native_flex_power_ui);
+      QTimer::singleShot(
+          3000, this, refresh_native_flex_power_ui);
+      QTimer::singleShot(
+          5000, this, refresh_native_flex_power_ui);
+      QTimer::singleShot(
+          8000, this, refresh_native_flex_power_ui);
+    }
+  else
+    {
+      // W7PP DEVIATION from donor: restore WSJT-Z's own stock range
+      // (450) here, not the donor's baseline (200), so that leaving
+      // Native FLEX does not regress the existing non-Flex maximum.
+      ui->outAttenuation->setRange(0, 450);
+      ui->outAttenuation->setInvertedAppearance(true);
+      ui->outAttenuation->setInvertedControls(true);
+      ui->outAttenuation->setEnabled(true);
+
+      ui->outAttenuation->setToolTip(
+          tr("Adjust Tx audio level"));
+
+      ui->outAttenuation->setValue (m_settings->value ("OutAttenuation", 0).toInt ());
+    }
+  // W7PP : restore Native FLEX RX operator gain setting.
+  ui->w7ppFlexRxGainSlider->setValue(
+      m_settings->value("FlexNativeRxGainDb", 0).toInt());
+  ui->w7ppFlexRxGainValue->setText(
+      QStringLiteral("%1 dB").arg(ui->w7ppFlexRxGainSlider->value()));
   m_block_pwr_tooltip = false;
   ui->sbCQTxFreq->setValue (m_settings->value ("CQTxFreq", 260).toInt());
   m_noSuffix=m_settings->value("NoSuffix",false).toBool();
@@ -2516,6 +2857,159 @@ void MainWindow::dataSink(qint64 frames)
   }
 }
 
+//------------------------------------------------------- flexDataSink()
+void MainWindow::flexDataSink(FlexVitaReceiver::DecoderBlock const& samples)
+{
+  static qint64 flex_fft_fill = 0;
+  //
+  // Native Flex is a third OPTIONAL RX source.
+  // The VITA receiver already supplies signed 16-bit 12 kHz audio.
+  //
+  if (!m_flex_rx_audio || !m_monitoring || samples.empty())
+    return;
+
+
+  //
+  // Match the normal WSJT Detector producer semantics exactly:
+  // accumulate 12 kHz samples and call dataSink() only at
+  // m_FFTSize sample boundaries.
+  //
+  // Detector::setBlockSize() receives MainWindow::FFTSize and stores
+  // that value as Detector::m_samplesPerFFT.  TCI uses the same
+  // m_samplesPerFFT boundary before emitting its frame count.
+  //
+
+  qint64 period_msec =
+      static_cast<qint64>(1000.0 * m_TRperiod);
+
+  if (period_msec < 1)
+    return;
+
+  qint64 period_position =
+      QDateTime::currentMSecsSinceEpoch() % period_msec;
+
+  if (period_position < 0)
+    period_position += period_msec;
+
+  //
+  // Same period-wrap model used by the stock Detector producer.
+  //
+  if (m_flex_last_period_msec < 0
+      || period_position < m_flex_last_period_msec)
+    {
+      dec_data.params.kin = 0;
+      flex_fft_fill = 0;
+    }
+
+  m_flex_last_period_msec =
+      period_position;
+
+  qint64 const capacity =
+      static_cast<qint64>(
+          sizeof(dec_data.d2) /
+          sizeof(dec_data.d2[0]));
+
+  qint64 const fft_block =
+      qMax<qint64>(
+          1,
+          static_cast<qint64>(m_FFTSize));
+
+  if (flex_fft_fill < 0
+      || flex_fft_fill >= fft_block)
+    {
+      flex_fft_fill = 0;
+    }
+
+  qint64 offset = 0;
+  qint64 const total =
+      static_cast<qint64>(samples.size());
+
+  while (offset < total)
+    {
+      qint64 current =
+          static_cast<qint64>(
+              dec_data.params.kin);
+
+      if (current < 0)
+        current = 0;
+
+      if (current >= capacity)
+        return;
+
+      qint64 const available =
+          capacity - current;
+
+      qint64 const needed =
+          fft_block - flex_fft_fill;
+
+      qint64 const remaining =
+          total - offset;
+
+      qint64 count =
+          qMin(
+              available,
+              qMin(
+                  needed,
+                  remaining));
+
+      if (count <= 0)
+        return;
+
+      // W7PP : operator-adjustable Native FLEX RX attenuation.
+      // 0 dB deliberately uses the original exact-copy path.
+      int const flex_rx_gain_db =
+          ui->w7ppFlexRxGainSlider->value();
+
+      double const flex_rx_gain =
+          (0 == flex_rx_gain_db)
+          ? 1.0
+          : std::pow(
+                10.0,
+                static_cast<double>(flex_rx_gain_db) / 20.0);
+
+      for (qint64 i = 0; i < count; ++i)
+        {
+          auto const source_sample =
+              samples[
+                  static_cast<std::size_t>(
+                      offset + i)];
+
+          if (0 == flex_rx_gain_db)
+            {
+              // Preserve the proven Native RX path exactly at 0 dB.
+              dec_data.d2[current + i] =
+                  source_sample;
+            }
+          else
+            {
+              dec_data.d2[current + i] =
+                  static_cast<qint16>(
+                      qRound(
+                          static_cast<double>(source_sample)
+                          * flex_rx_gain));
+            }
+        }
+
+      dec_data.params.kin =
+          static_cast<qint32>(
+              current + count);
+
+      offset += count;
+      flex_fft_fill += count;
+
+      //
+      // This is the important change:
+      // dataSink() now sees the same exact FFT-sized progression
+      // as Detector::framesWritten and TCI::tciframeswritten.
+      //
+      if (flex_fft_fill == fft_block)
+        {
+          dataSink(dec_data.params.kin);
+          flex_fft_fill = 0;
+        }
+    }
+}
+
 void MainWindow::startP1()
 {
   p1.start (QDir::toNativeSeparators (QDir {QApplication::applicationDirPath ()}.absoluteFilePath ("wsprd")), m_cmndP1);
@@ -2752,16 +3246,30 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
       }
 
     m_tci_audio = (m_config.tci_audio() && m_config.is_tci());
+    bool const new_flex_rx_audio =
+        (!m_tci_audio && m_config.flex_native_rx ());
+    bool const flex_rx_method_changed =
+        (m_flex_rx_audio != new_flex_rx_audio);
     bool was_monitoring = m_monitoring;
     if (m_monitoring && (m_config.restart_tci () or !m_tci_audio)) on_monitorButton_clicked (false);
-    if (!m_tci_audio) {
-      if(m_config.restart_audio_input () && !m_config.audio_input_device ().isNull ()) {
+    m_flex_rx_audio = new_flex_rx_audio;
+    // W7PP : follow Native FLEX RX selection immediately.
+    ui->w7ppFlexRxGainWidget->setVisible(m_flex_rx_audio);
+    syncFlexVitaReceiver ();
+    // Native Flex RX bypasses Windows soundcard input.
+    // TCI also bypasses Windows soundcard input.
+    if (!m_tci_audio && !m_flex_rx_audio) {
+      if((m_config.restart_audio_input () || flex_rx_method_changed) && !m_config.audio_input_device ().isNull ()) {
         Q_EMIT startAudioInputStream (m_config.audio_input_device ()
                                       , m_rx_audio_buffer_frames
                                       , m_detector, m_downSampleFactor
                                       , m_config.audio_input_channel ());
       }
+    }
 
+    // Flex native RX still uses the normal WSJT audio OUTPUT path.
+    // Only TCI owns its transmit audio path.
+    if (!m_tci_audio) {
       if(m_config.restart_audio_output () && !m_config.audio_output_device ().isNull ()) {
         Q_EMIT initializeAudioOutputStream (m_config.audio_output_device ()
                                             , AudioDevice::Mono == m_config.audio_output_channel () ? 1 : 2
@@ -2883,7 +3391,10 @@ void MainWindow::monitor (bool state)
   if (state) {
     m_diskData = false; // no longer reading WAV files
     if (!m_monitoring) {
-      if (m_tci_audio) {
+      if (m_flex_rx_audio) {
+        // W7PP : VITA stream already belongs to Audio Input.
+        // Monitor only enables decoder handoff.
+      } else if (m_tci_audio) {
         if (ui->bandComboBox->currentText()!="OOB") {
           Q_EMIT m_config.transceiver_audio(true);
         } else {
@@ -2894,7 +3405,11 @@ void MainWindow::monitor (bool state)
       }
     }
   } else {
-    if (m_tci_audio) {
+    if (m_flex_rx_audio) {
+      // W7PP : keep the VITA network stream alive.
+      // Next Monitor ON begins a fresh decoder period.
+      m_flex_last_period_msec = -1;
+    } else if (m_tci_audio) {
       if (ui->bandComboBox->currentText()!="OOB") {
         Q_EMIT m_config.transceiver_audio(false);
       } else {
@@ -2905,6 +3420,505 @@ void MainWindow::monitor (bool state)
     }
   }
   m_monitoring = state;
+}
+
+//------------------------------------------------ syncFlexVitaReceiver()
+void MainWindow::syncFlexVitaReceiver ()
+{
+  //
+  // :
+  // VITA network lifetime follows the selected RX source.
+  // Monitor only gates samples in flexDataSink().
+  //
+  if (!m_flex_rx_audio)
+    {
+      ++m_flex_vita_generation;
+      m_flex_vita_start_attempt = 0;
+      m_flex_vita_watchdog_armed = false;
+      if (m_flexVitaReceiver->running())
+        m_flexVitaReceiver->stop();
+
+      m_flex_vita_dax_channel = 0;
+      m_flex_last_period_msec = -1;
+      return;
+    }
+
+  int const desiredDax =
+      m_config.flex_dax_channel ();
+
+  if (m_flexVitaReceiver->running()
+      && m_flex_vita_dax_channel == desiredDax)
+    return;
+
+  if (m_flexVitaReceiver->running())
+    m_flexVitaReceiver->stop();
+
+  m_flex_vita_dax_channel = 0;
+
+  ++m_flex_vita_generation;
+  int const flexGeneration = m_flex_vita_generation;
+  ++m_flex_vita_start_attempt;
+  m_flex_vita_watchdog_armed = false;
+
+          // W7PP :
+          // SmartSDR must already be running on this PC.
+          // Discover the FLEX radio whose SmartSDR-Win GUI client IP
+          // matches one of this PC's local IPv4 addresses.
+          //
+          // W7PP 
+          //
+          // Native Flex/VITA radio selection:
+          //
+          // - Discover FLEX radios on UDP 4992.
+          // - If SmartSDR-Win on THIS PC is associated with
+          //   exactly one discovered FLEX, use that FLEX.
+          // - If there is only one FLEX on the LAN, use it.
+          // - SmartSDR station name is irrelevant.
+          //
+          QStringList flexAddresses;
+          QList<quint16> flexPorts;
+          QList<int> localSmartSdrMatches;
+
+          QStringList localIpv4;
+
+          for (auto const& address :
+               QNetworkInterface::allAddresses())
+            {
+              if (QAbstractSocket::IPv4Protocol ==
+                      address.protocol()
+                  && !address.isLoopback())
+                {
+                  localIpv4.append(
+                      address.toString());
+                }
+            }
+
+          QUdpSocket discovery;
+
+          if (!discovery.bind(
+                  QHostAddress::AnyIPv4,
+                  4992,
+                  QUdpSocket::ShareAddress
+                    | QUdpSocket::ReuseAddressHint))
+            {
+              verifyFlexVitaStart(
+                  flexGeneration,
+                  static_cast<quint64>(
+                      m_flexVitaReceiver->statistics().vitaPackets));
+              return;
+            }
+
+          QElapsedTimer discoveryTimer;
+          discoveryTimer.start();
+
+          while (discoveryTimer.elapsed() < 3500)
+            {
+              if (!discovery.waitForReadyRead(400))
+                continue;
+
+              while (discovery.hasPendingDatagrams())
+                {
+                  QByteArray packet;
+
+                  packet.resize(
+                      static_cast<int>(
+                          discovery.pendingDatagramSize()));
+
+                  QHostAddress senderAddress;
+                  quint16 senderPort = 0;
+
+                  qint64 const received =
+                      discovery.readDatagram(
+                          packet.data(),
+                          packet.size(),
+                          &senderAddress,
+                          &senderPort);
+
+                  if (received <= 0)
+                    continue;
+
+                  int const textStart =
+                      packet.indexOf(
+                          "discovery_protocol_version=");
+
+                  if (textStart < 0)
+                    continue;
+
+                  QByteArray const text =
+                      packet.mid(textStart);
+
+                  auto value =
+                      [&text](char const * key)
+                      {
+                        QByteArray const needle =
+                            QByteArray(key) + "=";
+
+                        int searchFrom = 0;
+
+                        while (true)
+                          {
+                            int const start =
+                                text.indexOf(
+                                    needle,
+                                    searchFrom);
+
+                            if (start < 0)
+                              return QByteArray {};
+
+                            bool const fieldBoundary =
+                                0 == start
+                                || ' ' == text.at(start - 1);
+
+                            if (fieldBoundary)
+                              {
+                                int const valueStart =
+                                    start + needle.size();
+
+                                int end = valueStart;
+
+                                while (end < text.size())
+                                  {
+                                    char const c =
+                                        text.at(end);
+
+                                    if (' ' == c
+                                        || '\0' == c
+                                        || '\r' == c
+                                        || '\n' == c)
+                                      break;
+
+                                    ++end;
+                                  }
+
+                                return text.mid(
+                                    valueStart,
+                                    end - valueStart);
+                              }
+
+                            searchFrom =
+                                start + needle.size();
+                          }
+                      };
+
+                  QByteArray const model =
+                      value("model");
+
+                  if (!model.startsWith("FLEX-"))
+                    continue;
+
+                  QString radioAddress =
+                      QString::fromLatin1(
+                          value("ip"))
+                          .trimmed();
+
+                  if (radioAddress.isEmpty())
+                    {
+                      radioAddress =
+                          senderAddress.toString();
+                    }
+
+                  if (radioAddress.isEmpty())
+                    continue;
+
+                  bool portOk = false;
+
+                  int const reportedPort =
+                      QString::fromLatin1(
+                          value("port"))
+                          .toInt(&portOk);
+
+                  quint16 const radioPort =
+                      static_cast<quint16>(
+                          portOk
+                            && reportedPort > 0
+                            && reportedPort <= 65535
+                              ? reportedPort
+                              : 4992);
+
+                  int radioIndex =
+                      flexAddresses.indexOf(
+                          radioAddress);
+
+                  if (radioIndex < 0)
+                    {
+                      flexAddresses.append(
+                          radioAddress);
+
+                      flexPorts.append(
+                          radioPort);
+
+                      radioIndex =
+                          flexAddresses.size() - 1;
+                    }
+
+                  QList<QByteArray> const guiIps =
+                      value("gui_client_ips")
+                          .split(',');
+
+                  QList<QByteArray> const guiPrograms =
+                      value("gui_client_programs")
+                          .split(',');
+
+                  int const guiCount =
+                      guiIps.size() < guiPrograms.size()
+                        ? guiIps.size()
+                        : guiPrograms.size();
+
+                  for (int i = 0;
+                       i < guiCount;
+                       ++i)
+                    {
+                      QString const guiIp =
+                          QString::fromLatin1(
+                              guiIps.at(i))
+                              .trimmed();
+
+                      QString const guiProgram =
+                          QString::fromLatin1(
+                              guiPrograms.at(i))
+                              .trimmed();
+
+                      if ("SmartSDR-Win" == guiProgram
+                          && localIpv4.contains(guiIp)
+                          && !localSmartSdrMatches.contains(
+                                 radioIndex))
+                        {
+                          localSmartSdrMatches.append(
+                              radioIndex);
+                        }
+                    }
+                }
+            }
+
+          int selectedRadio = -1;
+
+          if (1 == localSmartSdrMatches.size())
+            {
+              selectedRadio =
+                  localSmartSdrMatches.first();
+            }
+          else if (localSmartSdrMatches.size() > 1)
+            {
+              verifyFlexVitaStart(
+                  flexGeneration,
+                  static_cast<quint64>(
+                      m_flexVitaReceiver->statistics().vitaPackets));
+              return;
+            }
+          else if (1 == flexAddresses.size())
+            {
+              selectedRadio = 0;
+            }
+          else if (flexAddresses.isEmpty())
+            {
+              verifyFlexVitaStart(
+                  flexGeneration,
+                  static_cast<quint64>(
+                      m_flexVitaReceiver->statistics().vitaPackets));
+              return;
+            }
+          else
+            {
+              verifyFlexVitaStart(
+                  flexGeneration,
+                  static_cast<quint64>(
+                      m_flexVitaReceiver->statistics().vitaPackets));
+              return;
+            }
+
+          FlexVitaReceiver::Configuration flexConfig;
+
+          flexConfig.radioAddress =
+              flexAddresses.at(
+                  selectedRadio)
+                  .toStdString();
+
+          flexConfig.tcpPort =
+              flexPorts.at(
+                  selectedRadio);
+          flexConfig.daxChannel = desiredDax;
+          flexConfig.firstUdpPort = 4995;
+          flexConfig.lastUdpPort = 5010;
+  
+          dec_data.params.kin = 0;
+          m_flex_last_period_msec = -1;
+          m_flexVitaReceiver->reset();
+          m_flexVitaReceiver->start(flexConfig);
+          m_flex_vita_dax_channel = desiredDax;
+          verifyFlexVitaStart(
+              flexGeneration,
+              static_cast<quint64>(
+                  m_flexVitaReceiver->statistics().vitaPackets));
+}
+
+//----------------------------------------------- verifyFlexVitaStart()
+void MainWindow::verifyFlexVitaStart (
+    int generation,
+    quint64 baselinePackets,
+    int checksRemaining)
+{
+  //
+  // :
+  // A running worker is not sufficient proof.
+  // Require actual VITA packet flow.
+  //
+  QTimer::singleShot(
+      500,
+      this,
+      [this, generation, baselinePackets, checksRemaining] ()
+      {
+        if (generation != m_flex_vita_generation
+            || !m_flex_rx_audio)
+          return;
+
+        quint64 const packets =
+            static_cast<quint64>(
+                m_flexVitaReceiver->statistics().vitaPackets);
+
+        if (m_flexVitaReceiver->running()
+            && packets > baselinePackets)
+          {
+            //
+            // Healthy stream proven.
+            //
+            m_flex_vita_start_attempt = 0;
+            m_flex_vita_watchdog_packets = packets;
+
+            armFlexVitaWatchdog(generation);
+            return;
+          }
+
+        //
+        if (checksRemaining > 1)
+          {
+            verifyFlexVitaStart(
+                generation,
+                baselinePackets,
+                checksRemaining - 1);
+            return;
+          }
+
+        // No actual VITA packet flow.
+        //
+        if (m_flex_vita_start_attempt < 3)
+          {
+            if (m_flexVitaReceiver->running())
+              m_flexVitaReceiver->stop();
+
+            m_flex_vita_dax_channel = 0;
+
+            QTimer::singleShot(
+                250,
+                this,
+                [this, generation] ()
+                {
+                  if (generation == m_flex_vita_generation
+                      && m_flex_rx_audio)
+                    {
+                      syncFlexVitaReceiver();
+                    }
+                });
+
+            return;
+          }
+
+        //
+        // Three attempts failed. Stop retrying until the user
+        // changes/re-applies Native VITA, or a later fresh
+        // lifecycle request occurs.
+        //
+        if (m_flexVitaReceiver->running())
+          m_flexVitaReceiver->stop();
+
+        m_flex_vita_dax_channel = 0;
+        m_flex_vita_start_attempt = 0;
+        m_flex_vita_watchdog_armed = false;
+
+        QMessageBox::warning(
+            this,
+            tr("Native Flex / VITA-49"),
+            tr("Native Flex/VITA stream could not be started "
+               "after 3 attempts."));
+      });
+}
+
+//------------------------------------------------ armFlexVitaWatchdog()
+void MainWindow::armFlexVitaWatchdog (int generation)
+{
+  if (generation != m_flex_vita_generation
+      || !m_flex_rx_audio
+      || !m_flexVitaReceiver->running())
+    {
+      m_flex_vita_watchdog_armed = false;
+      return;
+    }
+
+  m_flex_vita_watchdog_armed = true;
+
+  m_flex_vita_watchdog_packets =
+      static_cast<quint64>(
+          m_flexVitaReceiver->statistics().vitaPackets);
+
+  QTimer::singleShot(
+      4000,
+      this,
+      [this, generation] ()
+      {
+        if (!m_flex_vita_watchdog_armed
+            || generation != m_flex_vita_generation
+            || !m_flex_rx_audio)
+          return;
+
+        quint64 const packets =
+            static_cast<quint64>(
+                m_flexVitaReceiver->statistics().vitaPackets);
+
+        //
+        // Do not judge RX packet flow while transmitting.
+        // VITA stays alive; simply check again after TX.
+        //
+        if (m_transmitting || g_iptt == 1)
+          {
+            m_flex_vita_watchdog_packets = packets;
+            armFlexVitaWatchdog(generation);
+            return;
+          }
+
+        if (m_flexVitaReceiver->running()
+            && packets > m_flex_vita_watchdog_packets)
+          {
+            //
+            // Healthy. Arm the next 4-second check.
+            //
+            m_flex_vita_watchdog_packets = packets;
+            armFlexVitaWatchdog(generation);
+            return;
+          }
+
+        //
+        // Stream was previously healthy but packet flow stopped.
+        // Begin a completely fresh three-attempt recovery.
+        //
+        m_flex_vita_watchdog_armed = false;
+        m_flex_vita_start_attempt = 0;
+
+        if (m_flexVitaReceiver->running())
+          m_flexVitaReceiver->stop();
+
+        m_flex_vita_dax_channel = 0;
+
+        QTimer::singleShot(
+            250,
+            this,
+            [this, generation] ()
+            {
+              if (generation == m_flex_vita_generation
+                  && m_flex_rx_audio)
+                {
+                  syncFlexVitaReceiver();
+                }
+            });
+      });
 }
 
 void MainWindow::on_actionAbout_triggered()                  //Display "About"
@@ -7365,8 +8379,10 @@ void MainWindow::stopTx()
     ptt0Timer.start(0);
   } else {
     ptt0Timer.start(200);                       //end-of-transmission sequencer delay
-    monitor (true);
-    statusUpdate ();
+    if (!m_flex_rx_audio) {
+      monitor (true);
+      statusUpdate ();
+    }
   }
 }
 
@@ -7378,6 +8394,13 @@ void MainWindow::stopTx2()
     statusUpdate ();
   } else {
     m_config.transceiver_ptt (false); //Lower PTT
+    if (m_flex_rx_audio) {
+      // VITA stayed alive through TX. Do not flush here.
+      // The first post-PTT block entering flexDataSink performs the flush.
+      m_flex_last_period_msec = -1;
+      monitor (true);
+      statusUpdate ();
+    }
   }
   if (m_mode == "JT9" && m_bFast9
        && ui->cbAutoSeq->isEnabled () && ui->cbAutoSeq->isChecked ()
@@ -10746,7 +11769,8 @@ void MainWindow::band_changed (Frequency f)
   auto const&curBand = ui->bandComboBox->currentText();
   
   // Set the attenuation value if options are checked
-  if (m_config.pwrBandTxMemory() && !m_tune) {
+  if (m_config.rig_name() != "Flex Native VITA-49"
+      && m_config.pwrBandTxMemory() && !m_tune) {
     if (m_pwrBandTxMemory.contains(curBand)) {
       ui->outAttenuation->setValue(m_pwrBandTxMemory[curBand].toInt());
     }
@@ -10852,7 +11876,8 @@ void MainWindow::on_tuneButton_clicked (bool checked)
   if (lastChecked == checked) return;
   lastChecked = checked;
   if (checked && m_tune==false) { // we're starting tuning so remember Tx and change pwr to Tune value
-    if (m_config.pwrBandTuneMemory ()) {
+    if (m_config.rig_name() != "Flex Native VITA-49"
+        && m_config.pwrBandTuneMemory ()) {
       auto const& curBand = ui->bandComboBox->currentText();
       m_pwrBandTxMemory[curBand] = ui->outAttenuation->value(); // remember our Tx pwr
       m_PwrBandSetOK = false;
@@ -10882,7 +11907,8 @@ void MainWindow::end_tuning ()
     else
         on_stopTxButton_clicked ();
   // we're turning off so remember our Tune pwr setting and reset to Tx pwr
-  if (m_config.pwrBandTuneMemory() || m_config.pwrBandTxMemory()) {
+  if (m_config.rig_name() != "Flex Native VITA-49"
+      && (m_config.pwrBandTuneMemory() || m_config.pwrBandTxMemory())) {
     auto const& curBand = ui->bandComboBox->currentText();
     m_pwrBandTuneMemory[curBand] = ui->outAttenuation->value(); // remember our Tune pwr
     m_PwrBandSetOK = false;
@@ -11418,6 +12444,64 @@ void MainWindow::transmit (double snr)
 
 void MainWindow::on_outAttenuation_valueChanged (int a)
 {
+  // W7PP :
+  // For Native FLEX this control is RF watts, not audio dB.
+  if (m_config.rig_name() == "Flex Native VITA-49")
+    {
+      bool max_ok = false;
+      bool allowed_ok = false;
+
+      int const max_watts =
+          qApp->property(
+              "W7PPNativeFlexMaxInternalPaPower")
+              .toInt(&max_ok);
+
+      int const changes_allowed =
+          qApp->property(
+              "W7PPNativeFlexRfPowerChangesAllowed")
+              .toInt(&allowed_ok);
+
+      QString const tt_str =
+          tr("Transmit RF power %1 W").arg(a);
+
+      if (ui->outAttenuation->hasFocus()
+          && !m_block_pwr_tooltip)
+        {
+          QToolTip::showText(
+              QCursor::pos(),
+              tt_str,
+              ui->outAttenuation);
+        }
+
+      // Programmatic changes are display-only.
+      // Startup, status refresh, band changes, etc. cannot
+      // send a power command.
+      if (m_block_pwr_tooltip
+          || !ui->outAttenuation->hasFocus()
+          || !ui->outAttenuation->isEnabled())
+        {
+          return;
+        }
+
+      if (!max_ok
+          || max_watts <= 0
+          || !allowed_ok
+          || changes_allowed == 0)
+        {
+          return;
+        }
+
+      // W7PP DEVIATION from donor: WSJT-Z's Configuration has no
+      // transceiver_tx_rf_power_level signal and TransceiverBase has
+      // no tx_rf_power_level virtual (already adjudicated for this
+      // port -- see Task 6 report). There is currently no path from
+      // this control back to the radio; the watts value above is
+      // validated but intentionally not sent anywhere yet.
+
+      // Do NOT fall through to SoundOutput attenuation.
+      return;
+    }
+
   QString tt_str;
   qreal dBAttn {a / 10.};       // slider interpreted as dB / 100
   if (m_tune && m_config.pwrBandTuneMemory()) {
