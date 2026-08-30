@@ -89,8 +89,15 @@ void Modulator::start (QString mode, unsigned symbolsLength, double framesPerSym
       w7pp_native_flex_tx_capture_file.setFileName(
           QString::fromLocal8Bit(w7pp_capture_path));
 
-      w7pp_native_flex_tx_capture_file.open(
-          QIODevice::WriteOnly | QIODevice::Truncate);
+      // DEVIATION from W7PP: the donor discarded open()'s return value,
+      // so a bad W7PP_NATIVE_FLEX_TX_CAPTURE_FILE path failed silently --
+      // the operator got neither a capture nor a diagnostic. Log it.
+      if (!w7pp_native_flex_tx_capture_file.open(
+              QIODevice::WriteOnly | QIODevice::Truncate))
+        {
+          qDebug () << "Modulator::start: failed to open Native FLEX TX capture file"
+                     << w7pp_capture_path;
+        }
     }
   m_quickClose = false;
   m_symbolsLength = symbolsLength;

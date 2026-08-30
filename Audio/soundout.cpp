@@ -80,6 +80,31 @@ void SoundOutput::restart (QIODevice * source)
       if (!audio_source)
         {
           Q_EMIT error (tr ("Native FLEX TX source is not an AudioDevice."));
+
+          // DEVIATION from W7PP: the donor left m_native_flex_source
+          // untouched on this bail, unlike its three sibling error paths
+          // below which all null it explicitly. A stale non-null
+          // m_native_flex_source is exactly the condition that lets a
+          // later resume() restart the pump against a dead source (see
+          // the DEVIATION note in resume () below), so null it here too
+          // for consistency.
+          m_native_flex_source = nullptr;
+          return;
+        }
+
+      // DEVIATION from W7PP: nativeFlexPump () copies only the first
+      // qint16 of every output frame (see below), but
+      // AudioDevice::load () puts the sample in the *second* slot for
+      // Channel::Right -- so a Right output-channel selection would
+      // silently transmit an unmodulated carrier with no error and no
+      // warning. Refuse to start instead, mirroring the mono-only check
+      // guarding the offline VITA dump path further below.
+      if (AudioDevice::Right == audio_source->channel ())
+        {
+          Q_EMIT error (
+              tr ("Native FLEX TX requires the output channel to be Mono, Left or Both; select one of those instead of Right."));
+
+          m_native_flex_source = nullptr;
           return;
         }
 
@@ -93,7 +118,7 @@ void SoundOutput::restart (QIODevice * source)
           static_cast<qint64> (audio_source->bytesPerFrame ());
 
       /*
-       * W7PP
+       * W7PP 
        *
        * Native FLEX only.
        *
@@ -221,7 +246,7 @@ void SoundOutput::restart (QIODevice * source)
         }
 
       /*
-       * W7PP
+       * W7PP 
        *
        * Independent Native FLEX DAX-TX wire pacer.
        *
@@ -237,7 +262,7 @@ void SoundOutput::restart (QIODevice * source)
       m_native_flex_tx_pace_phase = 0;
 
       /*
-       * W7PP
+       * W7PP 
        *
        * UDP transport object for Native FLEX DAX-TX.
        * Creating QUdpSocket alone does not transmit anything.
@@ -263,7 +288,7 @@ void SoundOutput::restart (QIODevice * source)
       error_ = false;
 
       /*
-       * W7PP
+       * W7PP 
        *
        * Start the independent DAX-TX wire pacer only when
        * the Native FLEX backend supplied a complete live route.
@@ -392,7 +417,7 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
   append_word (header);
 
   /*
-   * W7PP
+   * W7PP 
    *
    * Construct the proven reference form first.
    *
@@ -470,7 +495,7 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
               stream_id & 0xffu);
 
       /*
-       * W7PP
+       * W7PP 
        *
        * AetherSDR-style producer-driven DAX-TX:
        * when a complete 128-sample VITA packet exists,
@@ -484,6 +509,16 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
         {
           Q_EMIT error (
               tr ("Native FLEX TX UDP socket is unavailable."));
+
+          // DEVIATION from W7PP: the donor returned here leaving
+          // m_native_flex_vita_payload at exactly 256 bytes. The pump's
+          // trigger is size()==256 (see nativeFlexPump () below), so
+          // the next appended sample takes it to 258 and that
+          // condition can never match again -- one transient error
+          // would wedge the packetiser for the rest of the
+          // transmission. Clear it so the stream resynchronises on the
+          // next full 256-byte block.
+          m_native_flex_vita_payload.clear ();
           return;
         }
 
@@ -495,6 +530,10 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
         {
           Q_EMIT error (
               tr ("Native FLEX TX radio address is invalid."));
+
+          // DEVIATION from W7PP: see the clear () note above -- same
+          // wedge risk on this error path.
+          m_native_flex_vita_payload.clear ();
           return;
         }
 
@@ -508,6 +547,11 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
         {
           Q_EMIT error (
               tr ("Native FLEX TX UDP datagram send failed."));
+
+          // DEVIATION from W7PP: see the clear () note above -- same
+          // wedge risk on this error path (e.g. a transient
+          // ENOBUFS/EWOULDBLOCK on a busy socket).
+          m_native_flex_vita_payload.clear ();
           return;
         }
     }
@@ -548,7 +592,7 @@ void SoundOutput::nativeFlexCloseVitaDump ()
 void SoundOutput::nativeFlexTxPace ()
 {
   /*
-   * W7PP
+   * W7PP 
    *
    * 128 samples / 24000 Hz =
    * 5333.333333... microseconds per VITA packet.
@@ -818,6 +862,17 @@ void SoundOutput::suspend ()
   m_native_flex_tx_elapsed.invalidate ();
   m_native_flex_tx_next_packet_us = 0;
   m_native_flex_tx_pace_phase = 0;
+
+  // DEVIATION from W7PP: the donor stopped the pump timer here without
+  // clearing m_native_flex_source. suspend ()/resume () have no callers
+  // anywhere in this tree today, but they are public Q_SLOTS reachable
+  // by name through the meta-object system, so a stale non-null source
+  // would arm the moment anyone wires them up: resume () could then
+  // restart the pump against a dead source and resend VITA datagrams to
+  // a Flex radio while a different rig is selected. Null it
+  // unconditionally, same as reset ()/stop () already do.
+  m_native_flex_source = nullptr;
+
   if (m_native_flex_timer
       && m_native_flex_timer->isActive ())
     {
@@ -835,7 +890,20 @@ void SoundOutput::suspend ()
 
 void SoundOutput::resume ()
 {
-  if (m_native_flex_source
+  // DEVIATION from W7PP: the donor's early-return guard below was
+  // pointer-based only. Belt and braces: also require the live
+  // W7PPNativeFlexTxCapture property, so that even if
+  // m_native_flex_source/m_native_flex_timer were ever left non-null
+  // while a non-Flex rig is selected, resume () still cannot restart
+  // the Native FLEX pump. See the DEVIATION note in suspend () above.
+  bool const native_flex =
+      QCoreApplication::instance()
+      && QCoreApplication::instance()
+             ->property("W7PPNativeFlexTxCapture")
+             .toBool();
+
+  if (native_flex
+      && m_native_flex_source
       && m_native_flex_timer
       && !m_native_flex_timer->isActive ())
     {
