@@ -1545,16 +1545,55 @@ void NativeFlexTransceiver::do_ptt(bool on)
           throw error {"Native FLEX TX INHIBITED: no FLEX interlock status"};
         }
 
+      /*
+       * DEVIATION from W7PP: attach the interlock detail the monitor
+       * has already captured (state / reason / source).
+       *
+       * The gate itself still reads only the lock-free GateSnapshot, so
+       * the success path stays nonblocking as designed. The full
+       * snapshot is taken ONLY when we are already aborting the
+       * transmission, where a brief mutex is free.
+       *
+       * Without this the operator sees "FLEX reports TX not allowed"
+       * and has nothing to act on; the radio has usually said why.
+       *
+       * The "Native FLEX TX INHIBITED:" prefix must remain FIRST -
+       * TransceiverBase matches on it to treat the inhibit as
+       * recoverable rather than taking the rig offline.
+       */
+      auto const interlock_detail =
+          [this] () -> QString
+          {
+            auto const full = safety_monitor_.snapshot();
+
+            if (full.interlock_state.empty()
+                && full.interlock_reason.empty()
+                && full.interlock_source.empty())
+              {
+                return {};
+              }
+
+            return
+                QString {" (interlock state=%1 reason=%2 source=%3)"}
+                .arg(QString::fromStdString(full.interlock_state))
+                .arg(QString::fromStdString(full.interlock_reason))
+                .arg(QString::fromStdString(full.interlock_source));
+          };
+
       if (!safety.tx_allowed)
         {
           update_PTT(false);
-          throw error {"Native FLEX TX INHIBITED: FLEX reports TX not allowed"};
+          throw error {
+              QString {"Native FLEX TX INHIBITED: FLEX reports TX not allowed"}
+              + interlock_detail()};
         }
 
       if (!safety.interlock_ready)
         {
           update_PTT(false);
-          throw error {"Native FLEX TX INHIBITED: FLEX interlock is not READY"};
+          throw error {
+              QString {"Native FLEX TX INHIBITED: FLEX interlock is not READY"}
+              + interlock_detail()};
         }
 
       if (!safety.all_safety_meters_seen)
