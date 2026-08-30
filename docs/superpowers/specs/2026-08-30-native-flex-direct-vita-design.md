@@ -115,11 +115,28 @@ It is reported to `MainWindow` instead, and PTT is dropped.
 
 ## Portability
 
-`FlexVitaReceiver.cpp` is the only file in the donor set that is not already
-Qt-based. It runs a `std::thread` doing blocking `recv`/`recvfrom` on raw
-Winsock sockets. Everything else — the CAT backend, the safety monitor, the
-radio-selection dialog, the VITA TX path in `soundout.cpp` — is Qt and
-compiles unchanged.
+**Two** donor files are not Qt-based and use raw Winsock directly:
+
+- `FlexVitaReceiver.cpp` — a `std::thread` doing blocking `recv`/`recvfrom`,
+  with `SO_RCVTIMEO` receive timeouts. 15 call sites.
+- `NativeFlexSafetyMonitor.cpp` — its own `WSAStartup`, its own TCP and UDP
+  sockets, and a `select()` loop over both. 38 socket tokens.
+
+(An earlier revision of this spec claimed `FlexVitaReceiver.cpp` was the only
+one. That was wrong, and it matters: the safety monitor is added to the same
+CMake source list, so the build gate cannot pass without handling it.)
+
+The two files need different subsets of the shim. The receiver needs the
+`SO_RCVTIMEO` timeval mapping; the safety monitor does not, because it uses
+`select()` with a `timeval` already — portable as written. Both need the
+header substitution, the `recvfrom` length type, and the SIGPIPE guard.
+
+Everything else — the CAT backend, the radio-selection dialog, the VITA TX
+path in `soundout.cpp` — is Qt and compiles unchanged.
+
+`select()` and the `FD_*` macros additionally need `<sys/select.h>` on Linux;
+macOS pulls it in transitively via `<sys/socket.h>`, so its absence would not
+surface on the machine this port was developed on.
 
 A new header, `Transceiver/FlexSocketCompat.hpp`, provides the mapping. The
 receiver's threading and timing behaviour is preserved exactly; only the
@@ -142,7 +159,8 @@ releases.
 | `SO_RCVTIMEO` as `DWORD` milliseconds | `SO_RCVTIMEO` as `struct timeval` |
 | `recvfrom` length as `int` | `socklen_t` |
 
-Call sites: 15, all inside `FlexVitaReceiver.cpp`.
+Call sites: 15 in `FlexVitaReceiver.cpp`, plus the header substitution,
+`recvfrom` length type and SIGPIPE guard in `NativeFlexSafetyMonitor.cpp`.
 
 ### Three portability hazards
 
@@ -178,7 +196,7 @@ These are genuine behaviour differences, not mechanical substitutions.
 | `Transceiver/NativeFlexTransceiver.hpp` | verbatim | 90 |
 | `Transceiver/NativeFlexTransceiver.cpp` | verbatim | 1601 |
 | `Transceiver/NativeFlexSafetyMonitor.hpp` | verbatim | 245 |
-| `Transceiver/NativeFlexSafetyMonitor.cpp` | verbatim | 1803 |
+| `Transceiver/NativeFlexSafetyMonitor.cpp` | verbatim + shim edits | 1803 |
 | `Transceiver/NativeFlexRadioSelection.hpp` | verbatim | 40 |
 | `Transceiver/NativeFlexRadioSelection.cpp` | verbatim | 318 |
 | `Transceiver/FlexSocketCompat.hpp` | new, written for this port | ~60 |
