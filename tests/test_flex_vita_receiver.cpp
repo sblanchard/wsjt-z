@@ -52,6 +52,26 @@ namespace
 
     return packet;
   }
+
+  // Every slot uses this instead of touching FlexVitaReceiver::Configuration's
+  // default UDP port range (4995-5010) directly: that range is the real
+  // SmartSDR DAX range, so running this test on a machine with SmartSDR
+  // installed, or running it in parallel with another instance of itself,
+  // would otherwise fail with "No available UDP VITA port" for reasons
+  // that have nothing to do with what the test is checking. The fake radio
+  // in init() learns whichever port the receiver actually picked from the
+  // `client udpport` command, so nothing else needs to change.
+  FlexVitaReceiver::Configuration makeConfiguration (quint16 tcpPort)
+  {
+    FlexVitaReceiver::Configuration configuration;
+    configuration.radioAddress = "127.0.0.1";
+    configuration.tcpPort      = tcpPort;
+    configuration.daxChannel   = FakeDaxChannel;
+    configuration.firstUdpPort = 45995;
+    configuration.lastUdpPort  = 46010;
+
+    return configuration;
+  }
 }
 
 class TestFlexVitaReceiver : public QObject
@@ -152,10 +172,8 @@ void TestFlexVitaReceiver::reaches_streaming_state ()
 {
   FlexVitaReceiver receiver;
 
-  FlexVitaReceiver::Configuration configuration;
-  configuration.radioAddress = "127.0.0.1";
-  configuration.tcpPort      = server_->serverPort ();
-  configuration.daxChannel   = FakeDaxChannel;
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
 
   QVERIFY2 (receiver.start (configuration),
             qPrintable (QString::fromStdString (receiver.lastError ())));
@@ -170,10 +188,18 @@ void TestFlexVitaReceiver::reaches_streaming_state ()
 
 void TestFlexVitaReceiver::decodes_vita_audio_to_12khz ()
 {
-  FlexVitaReceiver receiver;
-
+  // Declared before `receiver` so that they are destroyed *after* it.
+  // FlexVitaReceiver's destructor joins the worker thread, which calls
+  // the audio callback below by reference into these atomics. If the
+  // atomics were declared after `receiver`, a QVERIFY/QCOMPARE failure
+  // between here and receiver.stop() would `return` out of this function
+  // early, unwinding in reverse declaration order: the atomics would be
+  // destroyed first, while the worker thread was still alive and still
+  // writing through references to that reclaimed stack space.
   std::atomic<int> delivered {0};
   std::atomic<int> nonZero   {0};
+
+  FlexVitaReceiver receiver;
 
   receiver.setAudioCallback (
       [&delivered, &nonZero] (FlexVitaReceiver::DecoderBlock const& block)
@@ -185,10 +211,8 @@ void TestFlexVitaReceiver::decodes_vita_audio_to_12khz ()
             nonZero.fetch_add (1);
       });
 
-  FlexVitaReceiver::Configuration configuration;
-  configuration.radioAddress = "127.0.0.1";
-  configuration.tcpPort      = server_->serverPort ();
-  configuration.daxChannel   = FakeDaxChannel;
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
 
   QVERIFY (receiver.start (configuration));
   QVERIFY (waitForStreaming (receiver));
@@ -198,7 +222,7 @@ void TestFlexVitaReceiver::decodes_vita_audio_to_12khz ()
   QUdpSocket sender;
 
   int const samplesPerPacket = 256;
-  int const packetCount      = 40;      // 10240 input samples -> ~2560 out
+  int const packetCount      = 40;      // 10240 input samples, 4:1 decimated
   double    phase            = 0.0;
   double const increment     = 2.0 * M_PI * 1000.0 / 48000.0;
 
@@ -222,20 +246,26 @@ void TestFlexVitaReceiver::decodes_vita_audio_to_12khz ()
       QTest::qWait (2);
     }
 
+  // 40 packets * 256 samples = 10240 input samples at 48 kHz. 4:1
+  // decimation yields exactly 10240 / 4 = 2560 decoded samples, delivered
+  // in complete 1200-sample blocks: exactly two of them (2400), with the
+  // remaining 160 samples held back (a partial final block is never
+  // emitted) until receiver.stop() discards them.
+  //
   // Sending is asynchronous with respect to the receiver's worker thread:
   // by the time all 40 packets have been handed to the kernel, the worker
-  // may only have drained and decoded a handful of them so far. Decimation
-  // is 4:1, so the very first 1200-sample callback fires after only ~19 of
-  // the 40 packets have been processed (19 * 256 / 4 = 1216 >= 1200). If we
-  // only waited for `delivered >= 1200`, we would race ahead and read the
-  // statistics while ~21 already-sent packets were still in flight, making
-  // this test fail deterministically with "19 accepted" rather than
-  // intermittently. So wait for both: audio delivered, AND every packet
-  // that was actually sent has been accounted for by the receiver.
+  // may only have drained and decoded a handful of them so far. Waiting
+  // only for the first block (`delivered >= 1200`) would race ahead and
+  // read the statistics after just ~19 of the 40 packets were processed,
+  // making this test fail deterministically rather than intermittently.
+  // So wait for both: all expected audio delivered, AND every packet that
+  // was actually sent accounted for by the receiver.
+  int const expectedDelivered = 2400;
+
   QDeadlineTimer deadline {5000};
 
   while (!deadline.hasExpired ()
-         && (delivered.load () < 1200
+         && (delivered.load () < expectedDelivered
              || receiver.statistics ().vitaPackets
                     < static_cast<quint64> (packetCount)))
     QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
@@ -248,11 +278,12 @@ void TestFlexVitaReceiver::decodes_vita_audio_to_12khz ()
   QCOMPARE (statistics.malformedPackets, quint64 (0));
   QCOMPARE (statistics.invalidFloats,    quint64 (0));
 
-  // 4:1 decimation, delivered in 1200-sample blocks.
-  QVERIFY2 (delivered.load () >= 1200,
-            qPrintable (QString ("only %1 decoder samples delivered")
-                        .arg (delivered.load ())));
-  QCOMPARE (delivered.load () % 1200, 0);
+  // Exact count, not just a lower bound: a receiver that decimated at the
+  // wrong ratio (say 2:1, or not at all) would still clear `>= 1200` and
+  // `% 1200 == 0` (deliverDecoderSample only ever emits whole 1200-sample
+  // blocks), so neither of those actually verifies the 4:1 conversion this
+  // test is named for. The exact figure does.
+  QCOMPARE (delivered.load (), expectedDelivered);
 
   QVERIFY2 (nonZero.load () > delivered.load () / 4,
             "decimated tone should be mostly non-zero");
@@ -264,10 +295,8 @@ void TestFlexVitaReceiver::rejects_foreign_stream_id ()
 {
   FlexVitaReceiver receiver;
 
-  FlexVitaReceiver::Configuration configuration;
-  configuration.radioAddress = "127.0.0.1";
-  configuration.tcpPort      = server_->serverPort ();
-  configuration.daxChannel   = FakeDaxChannel;
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
 
   QVERIFY (receiver.start (configuration));
   QVERIFY (waitForStreaming (receiver));
@@ -288,9 +317,32 @@ void TestFlexVitaReceiver::rejects_foreign_stream_id ()
   QTest::qWait (300);
 
   // Foreign streams are ignored silently - not counted as malformed.
-  auto const statistics = receiver.statistics ();
-  QCOMPARE (statistics.vitaPackets,      quint64 (0));
-  QCOMPARE (statistics.malformedPackets, quint64 (0));
+  {
+    auto const statistics = receiver.statistics ();
+    QCOMPARE (statistics.vitaPackets,      quint64 (0));
+    QCOMPARE (statistics.malformedPackets, quint64 (0));
+  }
+
+  // Positive control: without this, the zero counts above would also
+  // pass vacuously if the datagrams never reached the socket at all (for
+  // instance a wrong port, or a bind collision). Sending one genuine
+  // packet on the correct stream and requiring it to be accepted proves
+  // datagrams really do arrive here, so the zeros above mean "rejected",
+  // not "never delivered".
+  QByteArray const validPacket =
+      buildVitaPacket (1, std::vector<float> (64, 0.25f));
+
+  sender.writeDatagram (validPacket, QHostAddress::LocalHost,
+                        static_cast<quint16> (udpPort_));
+
+  QDeadlineTimer deadline {2000};
+
+  while (!deadline.hasExpired ()
+         && receiver.statistics ().vitaPackets < 1)
+    QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+
+  QVERIFY2 (receiver.statistics ().vitaPackets >= 1,
+            "a genuine packet on the correct stream must be accepted");
 
   receiver.stop ();
 }
@@ -299,10 +351,8 @@ void TestFlexVitaReceiver::counts_malformed_packets ()
 {
   FlexVitaReceiver receiver;
 
-  FlexVitaReceiver::Configuration configuration;
-  configuration.radioAddress = "127.0.0.1";
-  configuration.tcpPort      = server_->serverPort ();
-  configuration.daxChannel   = FakeDaxChannel;
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
 
   QVERIFY (receiver.start (configuration));
   QVERIFY (waitForStreaming (receiver));
@@ -334,10 +384,9 @@ void TestFlexVitaReceiver::start_fails_on_bad_address ()
 {
   FlexVitaReceiver receiver;
 
-  FlexVitaReceiver::Configuration configuration;
+  FlexVitaReceiver::Configuration configuration =
+      makeConfiguration (server_->serverPort ());
   configuration.radioAddress = "not-an-ip-address";
-  configuration.tcpPort      = server_->serverPort ();
-  configuration.daxChannel   = FakeDaxChannel;
 
   receiver.start (configuration);
 

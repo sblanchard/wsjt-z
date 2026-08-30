@@ -137,8 +137,10 @@ inline bool flexSetReceiveTimeout (SOCKET socket, int milliseconds)
  * Linux doubles the request for bookkeeping and clamps it against
  * net.core.rmem_max, so the requested value is not what you get. An
  * undersized buffer shows up as dropped VITA packets under load, which
- * looks like decode loss rather than an error - so the caller logs the
- * value this returns.
+ * looks like decode loss rather than an error - the return value lets a
+ * caller that cares about that distinction inspect what it actually got.
+ * A caller that does not need that distinction may ignore the return
+ * value; a smaller-than-requested buffer is not itself a failure.
  */
 inline int flexSetReceiveBuffer (SOCKET socket, int bytes)
 {

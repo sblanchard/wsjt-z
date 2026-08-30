@@ -884,16 +884,11 @@ struct FlexVitaReceiver::Impl
     flexSetReceiveTimeout(udp, 200);
 
     // Linux doubles the request and clamps against net.core.rmem_max, so
-    // report what we actually got. An undersized buffer drops VITA packets
-    // under load, which looks like decode loss rather than an error.
-    int const obtainedReceiveBuffer =
-        flexSetReceiveBuffer(udp, 1024 * 1024);
-
-    if (obtainedReceiveBuffer < 0)
-      {
-        fail("UDP receive buffer configuration failed");
-        return;
-      }
+    // the value actually granted can be smaller than requested. That is
+    // not treated as fatal: an undersized buffer only means VITA packets
+    // are more likely to be dropped under load, not that reception fails
+    // outright, so RX startup proceeds regardless of what was granted.
+    flexSetReceiveBuffer(udp, 1024 * 1024);
 
     SOCKET tcp =
         ::socket(

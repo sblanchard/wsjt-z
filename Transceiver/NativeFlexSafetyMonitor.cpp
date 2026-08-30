@@ -118,7 +118,7 @@ namespace
 
     int const result =
         ::select(
-            0,
+            socket + 1,
             &readSet,
             nullptr,
             nullptr,
@@ -798,14 +798,23 @@ struct NativeFlexSafetyMonitor::Impl
             static_cast<int>(buffer.size()),
             0);
 
-    if (received <= 0)
+    if (received > 0)
+      {
+        consumeTcp(
+            buffer.data(),
+            received);
+
+        return true;
+      }
+
+    if (0 == received)
       return false;
 
-    consumeTcp(
-        buffer.data(),
-        received);
-
-    return true;
+    //
+    // A negative result is a receive error, not necessarily a
+    // disconnect. EINTR/EAGAIN mean "try again", not "give up".
+    //
+    return flexIsRetryableReceiveError(WSAGetLastError());
   }
 
 
@@ -1452,7 +1461,7 @@ struct NativeFlexSafetyMonitor::Impl
 
         int const ready =
             ::select(
-                0,
+                std::max(tcp, udp) + 1,
                 &readSet,
                 nullptr,
                 nullptr,
@@ -1461,6 +1470,9 @@ struct NativeFlexSafetyMonitor::Impl
 
         if (ready < 0)
           {
+            if (flexIsRetryableReceiveError(WSAGetLastError()))
+              continue;
+
             if (!stopRequested.load())
               {
                 fail("Independent safety monitor select failed.");
@@ -1485,6 +1497,10 @@ struct NativeFlexSafetyMonitor::Impl
 
             if (received <= 0)
               {
+                if (0 != received
+                    && flexIsRetryableReceiveError(WSAGetLastError()))
+                  continue;
+
                 if (!stopRequested.load())
                   {
                     fail("Independent safety monitor TCP connection lost.");
