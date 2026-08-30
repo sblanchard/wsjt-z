@@ -25,3 +25,7 @@ add_test (test_qt_helpers test_qt_helpers)
 add_executable (test_flex_socket_compat test_flex_socket_compat.cpp)
 target_link_libraries (test_flex_socket_compat wsjt_qt Qt5::Test)
 add_test (test_flex_socket_compat test_flex_socket_compat)
+
+add_executable (test_flex_vita_receiver test_flex_vita_receiver.cpp)
+target_link_libraries (test_flex_vita_receiver wsjt_qt Qt5::Test Qt5::Network)
+add_test (test_flex_vita_receiver test_flex_vita_receiver)

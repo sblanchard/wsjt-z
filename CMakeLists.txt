@@ -214,6 +214,10 @@ set (wsjt_qt_CXXSRCS
   Transceiver/HRDTransceiver.cpp
   Transceiver/DXLabSuiteCommanderTransceiver.cpp
   Transceiver/TCITransceiver.cpp
+  Transceiver/FlexVitaReceiver.cpp
+  Transceiver/NativeFlexRadioSelection.cpp
+  Transceiver/NativeFlexTransceiver.cpp
+  Transceiver/NativeFlexSafetyMonitor.cpp
   Network/NetworkMessage.cpp
   Network/MessageClient.cpp
   widgets/LettersSpinBox.cpp
