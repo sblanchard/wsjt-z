@@ -678,16 +678,32 @@ QByteArray NativeFlexTransceiver::send_command(
 
           if (0 != response_code)
             {
+              /*
+               * DEVIATION from W7PP: include the radio's own
+               * explanation. FLEX returns it after the status code
+               * (e.g. "The maximum number of connected clients has
+               * been reached"); reporting only the hex leaves the
+               * operator with nothing actionable. The text may itself
+               * contain '|', so rejoin every remaining field.
+               */
+              QString const detail =
+                  QString::fromLatin1(
+                      fields.mid(2).join('|')).trimmed();
+
               QString const message =
                   QString {
-                      "Native FLEX command failed: %1 response 0x%2"
+                      "Native FLEX command failed: %1 response 0x%2%3"
                   }
                   .arg(command)
                   .arg(
                       response_code,
                       8,
                       16,
-                      QLatin1Char('0'));
+                      QLatin1Char('0'))
+                  .arg(
+                      detail.isEmpty()
+                      ? QString {}
+                      : QString {" - "} + detail);
 
               throw std::runtime_error {
                   message.toStdString()
@@ -1075,15 +1091,29 @@ int NativeFlexTransceiver::do_start()
 
           if (0 != response_code)
             {
+              /*
+               * DEVIATION from W7PP: surface the radio's explanation.
+               * 0xF3000001 is "The maximum number of connected clients
+               * has been reached" - the operator needs that, not a bare
+               * hex code.
+               */
+              QString const detail =
+                  QString::fromLatin1(
+                      fields.mid(2).join('|')).trimmed();
+
               QString const message =
                   QString {
-                      "Native FLEX client gui failed: response 0x%1"
+                      "Native FLEX client gui failed: response 0x%1%2"
                   }
                   .arg(
                       response_code,
                       8,
                       16,
-                      QLatin1Char('0'));
+                      QLatin1Char('0'))
+                  .arg(
+                      detail.isEmpty()
+                      ? QString {}
+                      : QString {" - "} + detail);
 
               control_socket_->abort();
 
