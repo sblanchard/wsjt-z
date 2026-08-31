@@ -1031,7 +1031,7 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
       if (m_pskReporterView) m_pskReporterView->setFont(font);
     });
 
-  setWindowTitle (program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z) + ")");
+  update_window_title ();
 
 
   connect(&proc_jt9, &QProcess::readyReadStandardOutput, this, &MainWindow::readFromStdout);
@@ -3236,6 +3236,19 @@ void MainWindow::showStatusMessage(const QString& statusMsg)
   statusBar()->showMessage(statusMsg, 5000);
 }
 
+// Window title: "<my call> — <program title> (WSJT-Z MOD ...)"; the
+// callsign prefix is elided until one is configured in Settings.
+void MainWindow::update_window_title ()
+{
+  auto title = program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z) + ")";
+  auto const callsign = m_config.my_callsign ();
+  if (!callsign.isEmpty ())
+    {
+      title = callsign + QStringLiteral (" — ") + title;
+    }
+  setWindowTitle (title);
+}
+
 void MainWindow::on_actionSettings_triggered()               //Setup Dialog
 {
   if (m_mode=="FT8") keep_frequency = true;
@@ -3249,6 +3262,7 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
     checkMSK144ContestType();
     if (m_config.my_callsign () != callsign) {
       m_baseCall = Radio::base_callsign (m_config.my_callsign ());
+      update_window_title ();
       ui->tx1->setEnabled (!elide_tx1_not_allowed () && ui->tx1->isEnabled ());
       morse_(const_cast<char *> (m_config.my_callsign ().toLatin1().constData()),
              const_cast<int *> (icw), &m_ncw, (FCL)m_config.my_callsign().length());
