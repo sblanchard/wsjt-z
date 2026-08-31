@@ -3262,7 +3262,8 @@ void MainWindow::showStatusMessage(const QString& statusMsg)
 // callsign prefix is elided until one is configured in Settings.
 void MainWindow::update_window_title ()
 {
-  auto title = program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z) + ")";
+  auto title = program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z)
+      + " · Native VITA-49 by W7PP · F4JZW)";
   auto const callsign = m_config.my_callsign ();
   if (!callsign.isEmpty ())
     {
