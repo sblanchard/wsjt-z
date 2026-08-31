@@ -89,6 +89,7 @@ private slots:
   void start_fails_on_bad_address ();
   void routes_a_slice_into_the_dax_channel ();
   void leaves_existing_dax_routing_alone ();
+  void reasserts_routing_while_the_stream_is_unbound ();
 
 private:
   bool waitForStreaming (FlexVitaReceiver&, int timeoutMs = 8000);
@@ -101,10 +102,34 @@ private:
   bool           announceSlice_ {false};
   int            sliceDaxChannel_ {0};
 
+  // When true the fake radio reports our dax_rx stream with an empty
+  // "slice=" field, i.e. attached to no slice - the state a real radio
+  // reports when nothing routes a slice into the DAX channel.
+  bool           streamUnbound_ {false};
+
+  int sliceDaxCommandCount (int slice, int channel) const;
+
   QByteArrayList commands_;
 
   bool sentSliceDaxCommand (int slice, int channel) const;
 };
+
+int TestFlexVitaReceiver::sliceDaxCommandCount (int slice, int channel) const
+{
+  QByteArray const expected =
+      "slice s " + QByteArray::number (slice) +
+      " dax=" + QByteArray::number (channel);
+
+  int count = 0;
+
+  for (auto const& command : commands_)
+    {
+      if (command.contains (expected))
+        ++count;
+    }
+
+  return count;
+}
 
 bool TestFlexVitaReceiver::sentSliceDaxCommand (int slice, int channel) const
 {
@@ -174,6 +199,7 @@ void TestFlexVitaReceiver::init ()
                       "|stream 0x" + QByteArray::number (FakeStreamId, 16) +
                       " type=dax_rx dax_channel=" +
                       QByteArray::number (FakeDaxChannel) +
+                      (streamUnbound_ ? " slice= " : "") +
                       " client_handle=0x" +
                       QByteArray::number (FakeClientHandle, 16) + "\n";
 
@@ -192,6 +218,7 @@ void TestFlexVitaReceiver::cleanup ()
 
   announceSlice_   = false;
   sliceDaxChannel_ = 0;
+  streamUnbound_   = false;
 }
 
 bool TestFlexVitaReceiver::waitForStreaming (FlexVitaReceiver& receiver, int timeoutMs)
@@ -506,6 +533,46 @@ void TestFlexVitaReceiver::leaves_existing_dax_routing_alone ()
     QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
 
   QVERIFY (!sentSliceDaxCommand (0, FakeDaxChannel));
+
+  receiver.stop ();
+}
+
+
+//
+// The WSJT slice is created by the CAT backend on a different TCP
+// connection, so it can appear - or be re-created after a radio-side
+// failure - long after the receiver started. While the radio reports
+// our stream attached to no slice, the receiver must keep asking.
+//
+void TestFlexVitaReceiver::reasserts_routing_while_the_stream_is_unbound ()
+{
+  announceSlice_   = true;
+  sliceDaxChannel_ = 0;
+  streamUnbound_   = true;
+
+  FlexVitaReceiver receiver;
+
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
+
+  QVERIFY2 (receiver.start (configuration),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QVERIFY2 (waitForStreaming (receiver),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QDeadlineTimer deadline {6000};
+
+  while (!deadline.hasExpired ()
+         && sliceDaxCommandCount (0, FakeDaxChannel) < 2)
+    {
+      QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+    }
+
+  QVERIFY2 (sliceDaxCommandCount (0, FakeDaxChannel) >= 2,
+            qPrintable (QString ("only %1 routing attempts; commands: %2")
+                        .arg (sliceDaxCommandCount (0, FakeDaxChannel))
+                        .arg (QString::fromLatin1 (commands_.join (" / ")))));
 
   receiver.stop ();
 }

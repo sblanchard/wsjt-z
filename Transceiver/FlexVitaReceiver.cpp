@@ -534,7 +534,11 @@ struct FlexVitaReceiver::Impl
   //
   void ensureDaxRouting(SOCKET tcp)
   {
-    if (daxRouteRequested.load()
+    //
+    // The radio confirms the binding on our own stream status; once
+    // it does there is nothing left to do.
+    //
+    if (streamHasSlice.load()
         || daxChannelFed.load())
       return;
 
@@ -543,6 +547,20 @@ struct FlexVitaReceiver::Impl
     if (slice < 0)
       return;
 
+    //
+    // Retry rather than fire once: the WSJT slice is created by the
+    // CAT backend on a different connection and may appear, or be
+    // re-created after a radio-side failure, long after the receiver
+    // has started.
+    //
+    auto const now = std::chrono::steady_clock::now();
+
+    if (std::chrono::steady_clock::time_point {} != lastRouteRequest
+        && now - lastRouteRequest < std::chrono::seconds(2))
+      return;
+
+    lastRouteRequest = now;
+
     std::ostringstream command;
 
     command
@@ -550,8 +568,6 @@ struct FlexVitaReceiver::Impl
         << slice
         << " dax="
         << configuration.daxChannel;
-
-    daxRouteRequested.store(true);
 
     sendCommand(
         tcp,
@@ -677,8 +693,7 @@ struct FlexVitaReceiver::Impl
 
               if (feedsUs)
                 daxChannelFed.store(true);
-              else if (firstInUseSlice.load() == sliceIndex
-                       && daxRouteRequested.load())
+              else if (firstInUseSlice.load() == sliceIndex)
                 daxChannelFed.store(false);
             }
 
@@ -743,6 +758,13 @@ struct FlexVitaReceiver::Impl
             daxStreamId.store(id);
             streaming.store(true);
           }
+
+        //
+        // "slice=" present but empty means the radio attached our
+        // stream to no slice at all.
+        //
+        streamHasSlice.store(
+            !extractValue(line, " slice=").empty());
       }
   }
 
@@ -925,7 +947,8 @@ struct FlexVitaReceiver::Impl
 
     firstInUseSlice.store(-1);
     daxChannelFed.store(false);
-    daxRouteRequested.store(false);
+    streamHasSlice.store(false);
+    lastRouteRequest = {};
     nextCommandSequence = 8;
 
     haveSequence = false;
@@ -1253,7 +1276,15 @@ struct FlexVitaReceiver::Impl
   //
   std::atomic<int> firstInUseSlice {-1};
   std::atomic<bool> daxChannelFed {false};
-  std::atomic<bool> daxRouteRequested {false};
+
+  //
+  // Set when the radio reports OUR dax_rx stream carrying a
+  // "slice=<letter>" binding. While it reports "slice=" empty the
+  // stream is attached to nothing and the packets carry silence.
+  //
+  std::atomic<bool> streamHasSlice {false};
+
+  std::chrono::steady_clock::time_point lastRouteRequest {};
 
   int nextCommandSequence {8};
 

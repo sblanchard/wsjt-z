@@ -523,6 +523,92 @@ void NativeFlexTransceiver::capture_transmit_status(
     }
 }
 
+/*
+ * DEVIATION from W7PP: wait for the slice we just asked FLEX to create.
+ *
+ * The slice index arrives in the slice status stream, not in the
+ * "slice create" response, so W7PP's test of slice_id_ on the line
+ * after the create raced the radio. Losing that race aborted a connect
+ * that was about to succeed, and - worse - left slice_id_ holding an
+ * index from a previous session, so every later "slice t <n> ..."
+ * addressed a slice that no longer existed and came back
+ * 0x5000000D "Invalid slice receiver".
+ */
+void NativeFlexTransceiver::wait_for_owned_slice()
+{
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < 3000
+      && slice_id_ < 0)
+    {
+      if (control_socket_->bytesAvailable() == 0)
+        {
+          control_socket_->waitForReadyRead(250);
+        }
+
+      if (QAbstractSocket::ConnectedState
+          != control_socket_->state())
+        {
+          throw std::runtime_error {
+              "Native FLEX TCP closed while waiting for the WSJT slice."
+          };
+        }
+
+      if (control_socket_->bytesAvailable() > 0)
+        {
+          pending_control_ += control_socket_->readAll();
+        }
+
+      while (true)
+        {
+          int const cr = pending_control_.indexOf('\r');
+          int const lf = pending_control_.indexOf('\n');
+          int end = -1;
+
+          if (cr >= 0)
+            {
+              end = cr;
+            }
+
+          if (lf >= 0 && (end < 0 || lf < end))
+            {
+              end = lf;
+            }
+
+          if (end < 0)
+            {
+              break;
+            }
+
+          QByteArray line =
+              pending_control_.left(end);
+
+          pending_control_.remove(0, end + 1);
+
+          while (!pending_control_.isEmpty()
+              && ('\r' == pending_control_.at(0)
+                  || '\n' == pending_control_.at(0)))
+            {
+              pending_control_.remove(0, 1);
+            }
+
+          line = line.trimmed();
+
+          capture_owned_slice(line);
+          capture_dax_tx_stream(line);
+          capture_transmit_status(line);
+        }
+    }
+
+  if (slice_id_ < 0)
+    {
+      throw std::runtime_error {
+          "Native FLEX reported no WSJT-owned slice."
+      };
+    }
+}
+
 void NativeFlexTransceiver::wait_for_dax_tx_stream()
 {
   QElapsedTimer timer;
@@ -1245,12 +1331,7 @@ int NativeFlexTransceiver::do_start()
           });
     }
 
-  if (slice_id_ < 0)
-    {
-      throw std::runtime_error {
-          "Native FLEX reported no WSJT-owned slice."
-      };
-    }
+  wait_for_owned_slice();
 
   /*
    * Native WSJT operation always uses DIGU.
