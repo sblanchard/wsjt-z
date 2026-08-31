@@ -4403,6 +4403,31 @@ void Configuration::impl::handle_transceiver_update (TransceiverState const& sta
 void Configuration::impl::handle_transceiver_failure (QString const& reason)
 {
   LOG_ERROR ("handle_transceiver_failure: reason: " << reason);
+
+  // DEVIATION from W7PP: the donor unconditionally tears the rig down here,
+  // even for a Native FLEX TX safety inhibit that TransceiverBase
+  // deliberately reports without calling offline() (see the "Native FLEX TX
+  // safety inhibit is recoverable" comment in TransceiverBase::cmd), because
+  // offline()/shutdown() would tear down the still-good Native FLEX RX path.
+  // close_rig() defeats that intent just the same: it stops
+  // NativeFlexSafetyMonitor, so on the next rig open its meter_updated stamp
+  // is unset and gateSnapshot().meter_age_ms comes back negative, so the very
+  // next PTT immediately re-throws "Native FLEX TX INHIBITED: safety
+  // telemetry is stale" -- which routes right back into this function and
+  // closes the rig again. Observed on a FLEX-8400M as a stale-telemetry
+  // cascade that would not clear after a band change, even though the
+  // radio's own safety-meter stream never actually went stale (measured gap
+  // 0.09 s against the 2000 ms threshold). For this one recoverable reason,
+  // leave the rig, CAT connection, VITA receive path and safety monitor all
+  // running, and always tell MainWindow so it can show the safety dialog
+  // instead of tearing things down or popping the generic "Rig failure" box.
+  if (reason.startsWith (QStringLiteral ("Native FLEX TX INHIBITED:")))
+    {
+      ui_->test_PTT_push_button->setChecked (false);
+      Q_EMIT self_->transceiver_failure (reason);
+      return;
+    }
+
   close_rig ();
   ui_->test_PTT_push_button->setChecked (false);
 
