@@ -63,3 +63,14 @@ else ()
   target_link_libraries (test_tx_rf_power_plumbing wsjt_fort_omp)
 endif ()
 add_test (test_tx_rf_power_plumbing test_tx_rf_power_plumbing)
+
+# The socket-compat shim and the code under test call Winsock
+# directly; the import library is only transitive where Qt5::Network
+# is linked, so name it explicitly for every test that can reach it.
+if (WIN32)
+  target_link_libraries (test_flex_socket_compat ws2_32)
+  target_link_libraries (test_flex_vita_receiver ws2_32)
+  target_link_libraries (test_native_flex_factory ws2_32)
+  target_link_libraries (test_native_flex_selection ws2_32)
+  target_link_libraries (test_tx_rf_power_plumbing ws2_32)
+endif ()
