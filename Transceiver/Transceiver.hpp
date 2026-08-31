@@ -108,6 +108,7 @@ public:
       , swr_ {0}
       , jtmode_ {"FT8"}  //w3sz tci
       , fastmode_ {false}  //w3sz tci
+      , tx_rf_power_level_ {-1}  // W7PP : Native FLEX
     {
     }
 
@@ -139,6 +140,7 @@ public:
     unsigned int swr () const {return swr_;}
     QString jtmode () const {return jtmode_;}  //w3sz tci
     bool fastmode () const {return fastmode_;}  //w3sz tci
+    int tx_rf_power_level () const {return tx_rf_power_level_;}  // W7PP : Native FLEX
 
     void online (bool state) {online_ = state;}
     void frequency (Frequency f) {rx_frequency_ = f;}
@@ -168,6 +170,7 @@ public:
     void swr (unsigned int mswr) {swr_ = mswr;}
     void jtmode(QString jtmode) {jtmode_ = jtmode;}  //w3sz tci
     void fastmode(bool fastmode) {fastmode_ = fastmode;}  //w3sz tci
+    void tx_rf_power_level (int level) {tx_rf_power_level_ = level;}  // W7PP : Native FLEX
 
   private:
     bool online_;
@@ -198,6 +201,10 @@ public:
     unsigned int swr_;
     QString jtmode_;  //w3sz tci
     bool fastmode_;  //w3sz tci
+    // W7PP : SmartSDR rfpower percent 0-100, -1 = no request.
+    // Client-only command field like audio_/tune_: deliberately NOT
+    // part of operator!= (which compares rig-reported state only).
+    int tx_rf_power_level_;
     // Don't forget to update the debug print and != operator if you
     // add more members here
 

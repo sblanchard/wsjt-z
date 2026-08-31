@@ -39,3 +39,8 @@ else ()
   target_link_libraries (test_native_flex_factory wsjt_fort_omp)
 endif ()
 add_test (test_native_flex_factory test_native_flex_factory)
+
+add_executable (test_tx_rf_power_plumbing test_tx_rf_power_plumbing.cpp)
+target_include_directories (test_tx_rf_power_plumbing PRIVATE ${CMAKE_BINARY_DIR})
+target_link_libraries (test_tx_rf_power_plumbing wsjt_qt Qt5::Test)
+add_test (test_tx_rf_power_plumbing test_tx_rf_power_plumbing)

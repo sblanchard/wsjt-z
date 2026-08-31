@@ -111,6 +111,10 @@ protected:
   virtual void do_post_mode (MODE) {}
 
   virtual void do_ptt (bool = true) = 0;
+
+  // W7PP : Native FLEX RF power (SmartSDR rfpower percent 0-100).
+  // Default no-op so only rigs with real support implement it.
+  virtual void do_tx_rf_power_level (int) {}
   virtual void do_post_ptt (bool = true) {}
 
   virtual bool do_pre_update () {return true;}
