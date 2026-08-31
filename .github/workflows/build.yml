@@ -34,8 +34,8 @@ jobs:
             qtbase5-dev qtmultimedia5-dev libqt5serialport5-dev \
             qttools5-dev qttools5-dev-tools libqt5websockets5-dev \
             libqt5sql5-sqlite \
-            libfftw3-dev libboost-log-dev libhamlib-dev libusb-1.0-0-dev \
-            libudev-dev
+            libfftw3-dev libboost-log-dev libhamlib-dev libhamlib-utils \
+            libusb-1.0-0-dev libudev-dev
 
       - name: Configure
         run: |
@@ -150,7 +150,8 @@ jobs:
             https://github.com/Hamlib/Hamlib/releases/download/4.6.5/hamlib-4.6.5.tar.gz
           tar xf hamlib.tar.gz
           cd hamlib-4.6.5
-          ./configure --prefix=/mingw64 --enable-shared --disable-static
+          ./configure --prefix=/mingw64 --enable-shared --disable-static \
+            --without-readline
           make -j"$(nproc)"
           make install DESTDIR="$(pwd)/staging"
           tar -C staging/mingw64 -cf ../hamlib-mingw64.tar .
