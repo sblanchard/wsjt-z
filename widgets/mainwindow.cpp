@@ -91,6 +91,7 @@
 #include "models/Bands.hpp"
 #include "Transceiver/TransceiverFactory.hpp"
 #include "Transceiver/NativeFlexTransceiver.hpp"
+#include "Transceiver/NativeFlexRadioSelection.hpp"
 #include "Transceiver/NativeFlexSafetyMonitor.hpp"
 #include "models/StationList.hpp"
 #include "validators/LiveFrequencyValidator.hpp"
@@ -3591,6 +3592,66 @@ void MainWindow::syncFlexVitaReceiver ()
   int const flexGeneration = m_flex_vita_generation;
   ++m_flex_vita_start_attempt;
   m_flex_vita_watchdog_armed = false;
+
+  // W7PP DEVIATION: prefer the operator's explicit radio selection
+  // (Settings -> Select FLEX Radio...), the same source of truth the
+  // Native FLEX CAT backend uses. The donor's SmartSDR-anchored scan
+  // below can only auto-pick when a single FLEX is on the LAN or a
+  // local SmartSDR-Win GUI disambiguates; with several radios and no
+  // SmartSDR it silently never starts, and it can never reach a radio
+  // outside the broadcast domain. The scan remains the fallback when
+  // nothing is selected.
+  {
+    auto const selectedRadio =
+        NativeFlexRadioSelection::selected();
+
+    if (selectedRadio.valid())
+      {
+        // FlexVitaReceiver takes a dotted-quad IPv4; a manually
+        // entered radio may be a hostname, so resolve it here. On
+        // resolution failure fall through to the donor scan.
+        QHostAddress resolved;
+
+        if (!resolved.setAddress(selectedRadio.address))
+          {
+            auto const info =
+                QHostInfo::fromName(selectedRadio.address);
+
+            for (auto const& candidate : info.addresses())
+              {
+                if (QAbstractSocket::IPv4Protocol ==
+                        candidate.protocol())
+                  {
+                    resolved = candidate;
+                    break;
+                  }
+              }
+          }
+
+        if (QAbstractSocket::IPv4Protocol == resolved.protocol())
+          {
+            FlexVitaReceiver::Configuration flexConfig;
+
+            flexConfig.radioAddress =
+                resolved.toString().toStdString();
+            flexConfig.tcpPort = selectedRadio.port;
+            flexConfig.daxChannel = desiredDax;
+            flexConfig.firstUdpPort = 4995;
+            flexConfig.lastUdpPort = 5010;
+
+            dec_data.params.kin = 0;
+            m_flex_last_period_msec = -1;
+            m_flexVitaReceiver->reset();
+            m_flexVitaReceiver->start(flexConfig);
+            m_flex_vita_dax_channel = desiredDax;
+            verifyFlexVitaStart(
+                flexGeneration,
+                static_cast<quint64>(
+                    m_flexVitaReceiver->statistics().vitaPackets));
+            return;
+          }
+      }
+  }
 
           // W7PP :
           // SmartSDR must already be running on this PC.
