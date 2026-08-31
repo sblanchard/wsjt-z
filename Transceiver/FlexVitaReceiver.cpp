@@ -1253,6 +1253,20 @@ struct FlexVitaReceiver::Impl
                 packet.data(),
                 received);
 
+            //
+            // These must run on the packet path too, not only when
+            // the socket goes idle below. A radio streaming steadily
+            // leaves recvfrom() almost never timing out, so anything
+            // hung off the idle branch alone effectively never runs.
+            //
+            // Both are non-blocking and rate-limit themselves. Draining
+            // TCP is deliberately NOT done here: listenTcpFor() ends in
+            // a blocking recv() carrying the socket's 250 ms timeout,
+            // which would stall the audio thread.
+            //
+            ensureDaxRouting(tcp);
+            reportDiagnostics();
+
             continue;
           }
 
