@@ -1062,6 +1062,14 @@ set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wall -Wextra -fexceptions -frtti")
 
+# GCC >= 16 raises maybe-uninitialized false positives on the
+# intentional placement-new-over-received-buffer pattern HRD wire
+# messages use; clang has no such option, so keep this GNU-only.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties (Transceiver/HRDTransceiver.cpp
+    PROPERTIES COMPILE_FLAGS -Wno-maybe-uninitialized)
+endif ()
+
 if (NOT APPLE)
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-pragmas")
   if (${OPENMP_FOUND})
