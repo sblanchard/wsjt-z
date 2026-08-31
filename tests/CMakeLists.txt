@@ -41,7 +41,7 @@ endif ()
 add_test (test_native_flex_factory test_native_flex_factory)
 
 add_executable (test_native_flex_selection test_native_flex_selection.cpp)
-target_link_libraries (test_native_flex_selection wsjt_qt Qt5::Test)
+target_link_libraries (test_native_flex_selection wsjt_qt Qt5::Test Qt5::Network)
 add_test (test_native_flex_selection test_native_flex_selection)
 
 add_executable (test_tx_rf_power_plumbing test_tx_rf_power_plumbing.cpp)
