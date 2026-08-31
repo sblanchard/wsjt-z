@@ -184,14 +184,9 @@ jobs:
           echo "dumpcpp: ${dumpcpp}"
           "${dumpcpp}" -getfile "{4FE359C5-A58F-459D-BE95-CA559FB4F270}"
 
-      # -femulated-tls: MSYS2's GCC 16 emits native-TLS .tls_common
-      # directives for OpenMP threadprivate COMMON blocks
-      # (lib/timer_common.inc) that its binutils assembler rejects;
-      # emulated TLS is the traditional MinGW model and assembles fine.
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja ${CMAKE_COMMON_FLAGS} \
-            -DCMAKE_Fortran_FLAGS=-femulated-tls
+          cmake -S . -B build -G Ninja ${CMAKE_COMMON_FLAGS}
 
       - name: Build
         run: cmake --build build
