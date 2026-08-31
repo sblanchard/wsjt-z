@@ -1811,6 +1811,13 @@ install (FILES
   DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
 
+# Also stage it into the build directory so running wsjtx straight from
+# the build tree (no install step) finds it: jt9's working directory is
+# m_appDir, which in that layout is the build directory itself. Without
+# this, FT8 decodes silently produce nothing (the decoder's false-decode
+# filtering runs without its callsign DB).
+configure_file (ALLCALL7.TXT ALLCALL7.TXT COPYONLY)
+
 install (DIRECTORY
   example_log_configurations
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
