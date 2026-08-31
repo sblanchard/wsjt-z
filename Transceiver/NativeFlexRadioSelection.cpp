@@ -98,6 +98,12 @@ namespace NativeFlexRadioSelection
     sessionRadio = Radio {};
   }
 
+  void restore(Radio const& radio)
+  {
+    QMutexLocker guard {&selectionMutex};
+    sessionRadio = radio;
+  }
+
   Radio selected()
   {
     QMutexLocker guard {&selectionMutex};

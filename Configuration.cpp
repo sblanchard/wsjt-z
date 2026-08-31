@@ -1993,6 +1993,20 @@ void Configuration::impl::read_settings ()
   w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();
   if (w7pp_flex_dax_channel_ < 1 || w7pp_flex_dax_channel_ > 8)
     w7pp_flex_dax_channel_ = 1;
+
+  // W7PP : restore the persisted Native FLEX radio selection.
+  {
+    NativeFlexRadioSelection::Radio radio;
+    radio.model = settings_->value ("FlexNativeRadioModel").toString ();
+    radio.serial = settings_->value ("FlexNativeRadioSerial").toString ();
+    radio.address = settings_->value ("FlexNativeRadioAddress").toString ();
+    radio.port = static_cast<quint16> (
+        settings_->value ("FlexNativeRadioPort", 4992).toUInt ());
+    if (radio.valid ())
+      {
+        NativeFlexRadioSelection::restore (radio);
+      }
+  }
   LOG_INFO(QString{"Configuration Settings (%1)"}.arg(settings_->fileName()));
   QStringList keys = settings_->allKeys();
   //Q_FOREACH (auto const& item, keys)
@@ -2328,6 +2342,18 @@ void Configuration::impl::write_settings ()
   SettingsGroup g {settings_, "Configuration"};
   settings_->setValue ("W7PPFlexNativeRx", w7pp_flex_native_rx_);
   settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);
+
+  // W7PP : persist the Native FLEX radio selection.
+  {
+    auto const radio = NativeFlexRadioSelection::selected ();
+    if (radio.valid ())
+      {
+        settings_->setValue ("FlexNativeRadioModel", radio.model);
+        settings_->setValue ("FlexNativeRadioSerial", radio.serial);
+        settings_->setValue ("FlexNativeRadioAddress", radio.address);
+        settings_->setValue ("FlexNativeRadioPort", radio.port);
+      }
+  }
 
   settings_->setValue ("MyCall", my_callsign_);
   settings_->setValue ("MyGrid", my_grid_);
@@ -3363,7 +3389,12 @@ void Configuration::impl::on_rig_combo_box_currentIndexChanged (int /* index */)
   // Every other radio continues through stock WSJT-X logic.
   if (ui_->rig_combo_box->currentText() == "Flex Native VITA-49")
     {
-      NativeFlexRadioSelection::refresh(this);
+      // A persisted or session selection stands; the "Select FLEX
+      // Radio..." button is the way to change it.
+      if (!NativeFlexRadioSelection::hasSelection())
+        {
+          NativeFlexRadioSelection::refresh(this);
+        }
     }
 }
 
