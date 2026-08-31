@@ -197,7 +197,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wsjt-z-windows-installer
-          path: build/*.exe
+          # Only the NSIS installer; a bare *.exe would sweep up every
+          # tool binary Ninja put in the build root.
+          path: build/wsjtz-*.exe
           if-no-files-found: error
 
   release:
