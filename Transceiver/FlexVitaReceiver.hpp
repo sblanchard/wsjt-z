@@ -60,6 +60,11 @@ public:
     std::uint64_t sequenceErrors {0};
     std::uint64_t malformedPackets {0};
     std::uint64_t invalidFloats {0};
+
+    // Largest |sample| seen in the raw 48 kHz VITA float stream.
+    // Zero while packets arrive means the radio is sending digital
+    // silence - a different fault from no packets at all.
+    double peakAmplitude {0.0};
   };
 
   FlexVitaReceiver();

@@ -3,6 +3,9 @@
 // W7PP : portability shim, see Transceiver/FlexSocketCompat.hpp
 #include "FlexSocketCompat.hpp"
 
+#include <QDebug>
+#include <QString>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -451,6 +454,8 @@ struct FlexVitaReceiver::Impl
     result.sequenceErrors = sequenceErrors.load();
     result.malformedPackets = malformedPackets.load();
     result.invalidFloats = invalidFloats.load();
+    result.peakAmplitude =
+        static_cast<double>(peakMicros.load()) / 1.0e6;
 
     return result;
   }
@@ -463,6 +468,7 @@ struct FlexVitaReceiver::Impl
     sequenceErrors.store(0);
     malformedPackets.store(0);
     invalidFloats.store(0);
+    peakMicros.store(0);
   }
 
   void setError(std::string const& text)
@@ -532,6 +538,39 @@ struct FlexVitaReceiver::Impl
   // own slice, or the operator set it in SmartSDR - nothing is
   // sent and the operator's routing is left alone.
   //
+  //
+  // Periodic RX diagnostic, mirroring the existing W7PPDIAG TX log.
+  //
+  // The three failure modes downstream of a connected radio look
+  // identical in the UI - a level meter at zero - so name them apart
+  // here: no packets at all, packets carrying digital silence, or
+  // audio arriving that never reaches the decoder.
+  //
+  void reportDiagnostics()
+  {
+    auto const now = std::chrono::steady_clock::now();
+
+    if (std::chrono::steady_clock::time_point {} != lastDiagnostic
+        && now - lastDiagnostic < std::chrono::seconds(5))
+      return;
+
+    lastDiagnostic = now;
+
+    qWarning().nospace()
+        << "W7PPDIAG RX dax=" << configuration.daxChannel
+        << " stream=0x"
+        << QString::number(daxStreamId.load(), 16)
+        << " sliceBound=" << (streamHasSlice.load() ? 1 : 0)
+        << " packets=" << static_cast<qulonglong>(vitaPackets.load())
+        << " floats=" << static_cast<qulonglong>(audioFloats.load())
+        << " decoded=" << static_cast<qulonglong>(decoderSamples.load())
+        << " peak="
+        << static_cast<double>(peakMicros.load()) / 1.0e6
+        << " seqErr=" << static_cast<qulonglong>(sequenceErrors.load())
+        << " malformed="
+        << static_cast<qulonglong>(malformedPackets.load());
+  }
+
   void ensureDaxRouting(SOCKET tcp)
   {
     //
@@ -907,6 +946,21 @@ struct FlexVitaReceiver::Impl
 
         audioFloats.fetch_add(1);
 
+        {
+          auto const magnitude =
+              static_cast<std::uint64_t>(
+                  std::fabs(sample) * 1.0e6);
+
+          auto current = peakMicros.load();
+
+          while (magnitude > current
+                 && !peakMicros.compare_exchange_weak(
+                        current,
+                        magnitude))
+            {
+            }
+        }
+
         float filtered = 0.0f;
 
         if (decimator.process(sample, filtered))
@@ -949,6 +1003,7 @@ struct FlexVitaReceiver::Impl
     daxChannelFed.store(false);
     streamHasSlice.store(false);
     lastRouteRequest = {};
+    lastDiagnostic = {};
     nextCommandSequence = 8;
 
     haveSequence = false;
@@ -1214,6 +1269,7 @@ struct FlexVitaReceiver::Impl
                 std::chrono::milliseconds(1));
 
             ensureDaxRouting(tcp);
+            reportDiagnostics();
 
             continue;
           }
@@ -1285,6 +1341,7 @@ struct FlexVitaReceiver::Impl
   std::atomic<bool> streamHasSlice {false};
 
   std::chrono::steady_clock::time_point lastRouteRequest {};
+  std::chrono::steady_clock::time_point lastDiagnostic {};
 
   int nextCommandSequence {8};
 
@@ -1301,6 +1358,9 @@ struct FlexVitaReceiver::Impl
   std::atomic<std::uint64_t> sequenceErrors {0};
   std::atomic<std::uint64_t> malformedPackets {0};
   std::atomic<std::uint64_t> invalidFloats {0};
+
+  // Peak |sample| scaled by 1e6 so it can live in an atomic integer.
+  std::atomic<std::uint64_t> peakMicros {0};
 };
 
 FlexVitaReceiver::FlexVitaReceiver()
