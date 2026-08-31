@@ -166,9 +166,23 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://www.dxatlas.com/OmniRig/Files/OmniRig.zip" -OutFile omnirig.zip
+          Write-Host "Downloaded $((Get-Item omnirig.zip).Length) bytes"
           Expand-Archive omnirig.zip -DestinationPath omnirig-setup
+          Get-ChildItem -Recurse omnirig-setup | ForEach-Object { Write-Host $_.FullName }
           $setup = Get-ChildItem -Recurse omnirig-setup -Filter *.exe | Select-Object -First 1
-          Start-Process -Wait -FilePath $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART"
+          Write-Host "Running installer: $($setup.FullName)"
+          $p = Start-Process -Wait -PassThru -FilePath $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART"
+          Write-Host "Installer exit code: $($p.ExitCode)"
+          Get-ChildItem "C:\Program Files (x86)" -ErrorAction SilentlyContinue |
+            Where-Object Name -match 'Afreet|Omni' |
+            ForEach-Object { Write-Host "Installed dir: $($_.FullName)" }
+          reg query "HKCR\TypeLib\{4FE359C5-A58F-459D-BE95-CA559FB4F270}" /s
+
+      - name: Check dumpcpp sees OmniRig
+        run: |
+          which dumpcpp
+          dumpcpp -getfile "{4FE359C5-A58F-459D-BE95-CA559FB4F270}" || true
+          echo "--- dumpcpp exit: $? ---"
 
       - name: Configure
         run: |

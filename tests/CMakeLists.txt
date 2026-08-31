@@ -40,11 +40,26 @@ else ()
 endif ()
 add_test (test_native_flex_factory test_native_flex_factory)
 
+# Both new tests link like test_native_flex_factory: wsjt_qt archive
+# members can reference the global loggers defined in wsjt_cxx
+# (Logger.cpp), and Apple's linker resolves those archive references
+# where GNU ld does not pull them in.
 add_executable (test_native_flex_selection test_native_flex_selection.cpp)
-target_link_libraries (test_native_flex_selection wsjt_qt Qt5::Test Qt5::Network Qt5::Widgets)
+target_include_directories (test_native_flex_selection PRIVATE ${CMAKE_BINARY_DIR})
+target_link_libraries (test_native_flex_selection wsjt_qt wsjt_cxx Qt5::Test Qt5::Network Qt5::Widgets)
+if ((NOT ${OPENMP_FOUND}) OR APPLE)
+  target_link_libraries (test_native_flex_selection wsjt_fort)
+else ()
+  target_link_libraries (test_native_flex_selection wsjt_fort_omp)
+endif ()
 add_test (test_native_flex_selection test_native_flex_selection)
 
 add_executable (test_tx_rf_power_plumbing test_tx_rf_power_plumbing.cpp)
 target_include_directories (test_tx_rf_power_plumbing PRIVATE ${CMAKE_BINARY_DIR})
-target_link_libraries (test_tx_rf_power_plumbing wsjt_qt Qt5::Test)
+target_link_libraries (test_tx_rf_power_plumbing wsjt_qt wsjt_cxx Qt5::Test)
+if ((NOT ${OPENMP_FOUND}) OR APPLE)
+  target_link_libraries (test_tx_rf_power_plumbing wsjt_fort)
+else ()
+  target_link_libraries (test_tx_rf_power_plumbing wsjt_fort_omp)
+endif ()
 add_test (test_tx_rf_power_plumbing test_tx_rf_power_plumbing)
