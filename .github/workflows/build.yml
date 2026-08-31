@@ -180,9 +180,9 @@ jobs:
 
       - name: Check dumpcpp sees OmniRig
         run: |
-          which dumpcpp
-          dumpcpp -getfile "{4FE359C5-A58F-459D-BE95-CA559FB4F270}" || true
-          echo "--- dumpcpp exit: $? ---"
+          dumpcpp="$(command -v dumpcpp-qt5 || command -v dumpcpp)"
+          echo "dumpcpp: ${dumpcpp}"
+          "${dumpcpp}" -getfile "{4FE359C5-A58F-459D-BE95-CA559FB4F270}"
 
       - name: Configure
         run: |

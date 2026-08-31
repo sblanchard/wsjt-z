@@ -918,10 +918,14 @@ set_property (SOURCE ${all_C_and_CXXSRCS} APPEND PROPERTY OBJECT_DEPENDS ${CMAKE
 
 if (WIN32)
   # generate the OmniRig COM interface source
-  find_program (DUMPCPP dumpcpp)
-  if (DUMPCPP-NOTFOUND)
+  # MSYS2 names the tool dumpcpp-qt5 so Qt5 and Qt6 can coexist. The
+  # original guard tested the literal variable DUMPCPP-NOTFOUND, which
+  # is never set, so a missing tool fell through to a misleading
+  # "install OmniRig" error from the empty execute_process output.
+  find_program (DUMPCPP NAMES dumpcpp dumpcpp-qt5)
+  if (NOT DUMPCPP)
     message (FATAL_ERROR "dumpcpp tool not found")
-  endif (DUMPCPP-NOTFOUND)
+  endif ()
   execute_process (
     COMMAND ${DUMPCPP} -getfile {4FE359C5-A58F-459D-BE95-CA559FB4F270}
     OUTPUT_VARIABLE AXSERVER
