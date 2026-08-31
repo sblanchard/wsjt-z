@@ -87,14 +87,39 @@ private slots:
   void rejects_foreign_stream_id ();
   void counts_malformed_packets ();
   void start_fails_on_bad_address ();
+  void routes_a_slice_into_the_dax_channel ();
+  void leaves_existing_dax_routing_alone ();
 
 private:
   bool waitForStreaming (FlexVitaReceiver&, int timeoutMs = 8000);
 
-  QTcpServer * server_ {nullptr};
-  QTcpSocket * client_ {nullptr};
-  int          udpPort_ {0};
+  QTcpServer *   server_ {nullptr};
+  QTcpSocket *   client_ {nullptr};
+  int            udpPort_ {0};
+
+  // Fake radio slice state, replayed when the receiver subscribes.
+  bool           announceSlice_ {false};
+  int            sliceDaxChannel_ {0};
+
+  QByteArrayList commands_;
+
+  bool sentSliceDaxCommand (int slice, int channel) const;
 };
+
+bool TestFlexVitaReceiver::sentSliceDaxCommand (int slice, int channel) const
+{
+  QByteArray const expected =
+      "slice s " + QByteArray::number (slice) +
+      " dax=" + QByteArray::number (channel);
+
+  for (auto const& command : commands_)
+    {
+      if (command.contains (expected))
+        return true;
+    }
+
+  return false;
+}
 
 void TestFlexVitaReceiver::init ()
 {
@@ -103,6 +128,8 @@ void TestFlexVitaReceiver::init ()
 
   client_  = nullptr;
   udpPort_ = 0;
+
+  commands_.clear ();
 
   // Drive the fake radio side of the handshake as the receiver talks.
   connect (server_, &QTcpServer::newConnection, this, [this] ()
@@ -118,6 +145,17 @@ void TestFlexVitaReceiver::init ()
           while (client_->canReadLine ())
             {
               QByteArray const line = client_->readLine ().trimmed ();
+
+              commands_.append (line);
+
+              if (announceSlice_ && line.contains ("sub slice all"))
+                {
+                  client_->write ("S" +
+                      QByteArray::number (FakeClientHandle, 16) +
+                      "|slice 0 in_use=1 mode=DIGU dax=" +
+                      QByteArray::number (sliceDaxChannel_) +
+                      " RF_frequency=14.074000\n");
+                }
 
               if (line.contains ("client udpport"))
                 {
@@ -151,6 +189,9 @@ void TestFlexVitaReceiver::cleanup ()
   delete server_;
   server_ = nullptr;
   client_ = nullptr;
+
+  announceSlice_   = false;
+  sliceDaxChannel_ = 0;
 }
 
 bool TestFlexVitaReceiver::waitForStreaming (FlexVitaReceiver& receiver, int timeoutMs)
@@ -398,6 +439,73 @@ void TestFlexVitaReceiver::start_fails_on_bad_address ()
   QVERIFY2 (!receiver.lastError ().empty (),
             "an invalid IPv4 address must produce an error");
   QVERIFY (!receiver.streaming ());
+
+  receiver.stop ();
+}
+
+
+//
+// An operator who never opens the SmartSDR DAX panel leaves every slice
+// routed to DAX channel 0, so the radio sends VITA-49 packets carrying
+// silence. The receiver must route a slice into its own channel.
+//
+void TestFlexVitaReceiver::routes_a_slice_into_the_dax_channel ()
+{
+  announceSlice_   = true;
+  sliceDaxChannel_ = 0;
+
+  FlexVitaReceiver receiver;
+
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
+
+  QVERIFY2 (receiver.start (configuration),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QVERIFY2 (waitForStreaming (receiver),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QDeadlineTimer deadline {3000};
+
+  while (!deadline.hasExpired ()
+         && !sentSliceDaxCommand (0, FakeDaxChannel))
+    {
+      QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+    }
+
+  QVERIFY2 (sentSliceDaxCommand (0, FakeDaxChannel),
+            qPrintable ("commands seen: " +
+                        QString::fromLatin1 (commands_.join (" / "))));
+
+  receiver.stop ();
+}
+
+//
+// Routing the operator already has - set by hand in SmartSDR, or by the
+// Native FLEX CAT backend binding its own slice - must be left alone.
+//
+void TestFlexVitaReceiver::leaves_existing_dax_routing_alone ()
+{
+  announceSlice_   = true;
+  sliceDaxChannel_ = FakeDaxChannel;
+
+  FlexVitaReceiver receiver;
+
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
+
+  QVERIFY2 (receiver.start (configuration),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QVERIFY2 (waitForStreaming (receiver),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QDeadlineTimer settle {1500};
+
+  while (!settle.hasExpired ())
+    QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+
+  QVERIFY (!sentSliceDaxCommand (0, FakeDaxChannel));
 
   receiver.stop ();
 }

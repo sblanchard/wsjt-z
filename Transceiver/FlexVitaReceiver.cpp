@@ -523,6 +523,42 @@ struct FlexVitaReceiver::Impl
         message.str());
   }
 
+  //
+  // Route a slice into our DAX channel so the operator does not
+  // have to do it by hand in the SmartSDR DAX panel.
+  //
+  // Deliberately conservative: if any in-use slice already feeds
+  // the channel - because the Native FLEX CAT backend bound its
+  // own slice, or the operator set it in SmartSDR - nothing is
+  // sent and the operator's routing is left alone.
+  //
+  void ensureDaxRouting(SOCKET tcp)
+  {
+    if (daxRouteRequested.load()
+        || daxChannelFed.load())
+      return;
+
+    int const slice = firstInUseSlice.load();
+
+    if (slice < 0)
+      return;
+
+    std::ostringstream command;
+
+    command
+        << "slice s "
+        << slice
+        << " dax="
+        << configuration.daxChannel;
+
+    daxRouteRequested.store(true);
+
+    sendCommand(
+        tcp,
+        nextCommandSequence++,
+        command.str());
+  }
+
   void consumeTcp(
       char const * data,
       int length)
@@ -572,6 +608,93 @@ struct FlexVitaReceiver::Impl
             parseNumericId(
                 "0x" + line.substr(1));
       }
+
+    //
+    // Slice status, e.g.
+    //
+    //   S1A2B3C4|slice 0 in_use=1 mode=DIGU dax=2 ...
+    //
+    // Track the lowest in-use slice and whether anything is
+    // already routed to our DAX channel.  Without a slice routed
+    // to it the radio still creates the dax_rx stream and still
+    // sends VITA-49 packets - they just carry silence, which
+    // presents as a connected radio with a dead RX level meter.
+    //
+    {
+      auto const slicePos = line.find("|slice ");
+
+      if (std::string::npos != slicePos)
+        {
+          auto const start = slicePos + 7;
+
+          auto end = line.find(' ', start);
+
+          if (std::string::npos == end)
+            end = line.size();
+
+          int sliceIndex = -1;
+
+          try
+            {
+              sliceIndex =
+                  std::stoi(
+                      line.substr(
+                          start,
+                          end - start));
+            }
+          catch (...)
+            {
+              sliceIndex = -1;
+            }
+
+          if (sliceIndex < 0)
+            return;
+
+          bool const gone =
+              std::string::npos != line.find(" removed")
+              || "0" == extractValue(line, " in_use=");
+
+          if (gone)
+            {
+              if (firstInUseSlice.load() == sliceIndex)
+                firstInUseSlice.store(-1);
+
+              return;
+            }
+
+          //
+          // A slice status line only carries the fields that
+          // changed, so absence of " dax=" says nothing.
+          //
+          auto const daxText =
+              extractValue(line, " dax=");
+
+          if (!daxText.empty())
+            {
+              bool const feedsUs =
+                  daxText ==
+                  std::to_string(configuration.daxChannel);
+
+              if (feedsUs)
+                daxChannelFed.store(true);
+              else if (firstInUseSlice.load() == sliceIndex
+                       && daxRouteRequested.load())
+                daxChannelFed.store(false);
+            }
+
+          int expected = firstInUseSlice.load();
+
+          while (expected < 0 || sliceIndex < expected)
+            {
+              if (firstInUseSlice.compare_exchange_weak(
+                      expected,
+                      sliceIndex))
+                break;
+            }
+
+          return;
+        }
+    }
 
     //
     // There may already be another DAX RX stream on the same
@@ -800,6 +923,11 @@ struct FlexVitaReceiver::Impl
 
     daxStreamId.store(0);
 
+    firstInUseSlice.store(-1);
+    daxChannelFed.store(false);
+    daxRouteRequested.store(false);
+    nextCommandSequence = 8;
+
     haveSequence = false;
     lastPacketCount = 0;
 
@@ -1018,6 +1146,13 @@ struct FlexVitaReceiver::Impl
 
     streaming.store(true);
 
+    //
+    // The slice may not exist yet - the Native FLEX CAT backend
+    // creates its own after the receiver starts - so this is
+    // retried from the RX loop until a slice appears.
+    //
+    ensureDaxRouting(tcp);
+
     std::array<unsigned char, 65536> packet {};
 
     while (!stopRequested.load())
@@ -1054,6 +1189,8 @@ struct FlexVitaReceiver::Impl
             listenTcpFor(
                 tcp,
                 std::chrono::milliseconds(1));
+
+            ensureDaxRouting(tcp);
 
             continue;
           }
@@ -1106,6 +1243,19 @@ struct FlexVitaReceiver::Impl
   std::string pendingTcp {};
 
   std::atomic<std::uint32_t> daxStreamId {0};
+
+  //
+  // Slice -> DAX routing state, learned from "sub slice all".
+  //
+  // firstInUseSlice   lowest in-use slice the radio has reported
+  // daxChannelFed     some in-use slice already routes to our channel
+  // daxRouteRequested we have asked the radio to route one
+  //
+  std::atomic<int> firstInUseSlice {-1};
+  std::atomic<bool> daxChannelFed {false};
+  std::atomic<bool> daxRouteRequested {false};
+
+  int nextCommandSequence {8};
 
   Decimator48To12 decimator {};
 

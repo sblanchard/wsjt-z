@@ -1262,6 +1262,27 @@ int NativeFlexTransceiver::do_start()
       .arg(slice_id_));
 
   /*
+   * DEVIATION from W7PP: route the WSJT-owned slice into the DAX RX
+   * channel FlexVitaReceiver streams from.
+   *
+   * W7PP leaves this to the operator, who has to open the SmartSDR
+   * DAX panel and set the slice's DAX channel by hand. Miss it and
+   * the radio still creates the dax_rx stream and still sends VITA-49
+   * packets - they just carry silence, so the radio reads as
+   * connected with a dead RX level meter.
+   *
+   * This is the authoritative binding: it names the slice WSJT owns,
+   * so it wins over the receiver's own fallback routing, which only
+   * fires when nothing at all feeds the channel.
+   */
+  send_command(
+      QString {
+          "slice s %1 dax=%2"
+      }
+      .arg(slice_id_)
+      .arg(dax_channel_));
+
+  /*
    * W7PP :
    *
    * Native FLEX TX routing only.
