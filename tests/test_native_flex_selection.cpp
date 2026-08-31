@@ -5,6 +5,7 @@
 #include <QUdpSocket>
 
 #include "Transceiver/NativeFlexDiscovery.hpp"
+#include "Transceiver/NativeFlexRadioDialog.hpp"
 #include "Transceiver/NativeFlexRadioSelection.hpp"
 
 class TestNativeFlexSelection final
@@ -132,6 +133,34 @@ private slots:
     QTRY_COMPARE (discovery.radios ().size (), 2);
 
     discovery.stop ();
+  }
+
+  void manual_entry_bare_host ()
+  {
+    auto const radio =
+        NativeFlexRadioDialog::parse_manual_entry ("192.168.1.100");
+    QVERIFY (radio.valid ());
+    QCOMPARE (radio.address, QString {"192.168.1.100"});
+    QCOMPARE (radio.port, quint16 {4992});
+    QCOMPARE (radio.model, QString {"Manual"});
+  }
+
+  void manual_entry_host_and_port ()
+  {
+    auto const radio =
+        NativeFlexRadioDialog::parse_manual_entry ("flex.example.net:4993");
+    QVERIFY (radio.valid ());
+    QCOMPARE (radio.address, QString {"flex.example.net"});
+    QCOMPARE (radio.port, quint16 {4993});
+  }
+
+  void manual_entry_rejects_bad_input ()
+  {
+    QVERIFY (!NativeFlexRadioDialog::parse_manual_entry ("").valid ());
+    QVERIFY (!NativeFlexRadioDialog::parse_manual_entry ("   ").valid ());
+    QVERIFY (!NativeFlexRadioDialog::parse_manual_entry ("host:0").valid ());
+    QVERIFY (!NativeFlexRadioDialog::parse_manual_entry ("host:99999").valid ());
+    QVERIFY (!NativeFlexRadioDialog::parse_manual_entry (":4992").valid ());
   }
 };
 

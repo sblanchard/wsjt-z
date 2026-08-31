@@ -590,6 +590,7 @@ private:
   Q_SLOT void on_force_DTR_combo_box_currentIndexChanged (int);
   Q_SLOT void on_force_RTS_combo_box_currentIndexChanged (int);
   Q_SLOT void on_rig_combo_box_currentIndexChanged (int);
+  Q_SLOT void on_flex_radio_select_push_button_clicked ();
   Q_SLOT void on_add_macro_push_button_clicked (bool = false);
   Q_SLOT void on_delete_macro_push_button_clicked (bool = false);
   Q_SLOT void on_PTT_method_button_group_buttonClicked (int);
@@ -2306,6 +2307,11 @@ void Configuration::impl::update_w7pp_flex_rx_controls (QString const& rig_name)
   ui_->sound_input_channel_combo_box->setEnabled (!native);
   ui_->w7pp_flex_dax_channel_label->setEnabled (native);
   ui_->w7pp_flex_dax_channel_combo_box->setEnabled (native);
+
+  // W7PP : the radio picker applies whenever the Native FLEX rig is
+  // selected, independent of the chosen RX method.
+  ui_->flex_radio_select_push_button->setEnabled (
+      rig_name == "Flex Native VITA-49");
 }
 
 void Configuration::impl::find_audio_devices ()
@@ -3396,6 +3402,13 @@ void Configuration::impl::on_rig_combo_box_currentIndexChanged (int /* index */)
           NativeFlexRadioSelection::refresh(this);
         }
     }
+}
+
+// W7PP : explicit radio picker; also the way to switch between
+// multiple FLEX radios or enter an address directly.
+void Configuration::impl::on_flex_radio_select_push_button_clicked ()
+{
+  NativeFlexRadioSelection::refresh (this);
 }
 
 void Configuration::impl::on_CAT_data_bits_button_group_buttonClicked (int /* id */)

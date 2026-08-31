@@ -216,6 +216,7 @@ set (wsjt_qt_CXXSRCS
   Transceiver/TCITransceiver.cpp
   Transceiver/FlexVitaReceiver.cpp
   Transceiver/NativeFlexDiscovery.cpp
+  Transceiver/NativeFlexRadioDialog.cpp
   Transceiver/NativeFlexRadioSelection.cpp
   Transceiver/NativeFlexTransceiver.cpp
   Transceiver/NativeFlexSafetyMonitor.cpp
