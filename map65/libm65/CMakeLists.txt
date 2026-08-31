@@ -116,6 +116,12 @@ set (libm65_CXXSRCS
 add_definitions (-DBIGSYM=1)
 set_source_files_properties (sec_midn.f90 PROPERTIES COMPILE_FLAGS -fno-second-underscore)
 
+# m65b passes integer*1 shared-memory buffer slices to m65c's real*4
+# dummies (the same reinterpret trick the wsjtx/jt9 shared memory
+# uses); both live in m65a.f90, so GCC >= 10 makes the visible
+# mismatch a hard error without this flag.
+set_source_files_properties (m65a.f90 PROPERTIES COMPILE_FLAGS -fallow-argument-mismatch)
+
 set (libm65_C_and_CXXSRCS
   ${libm65_CSRCS}
   ${libm65_CXXSRCS}

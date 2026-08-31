@@ -76,18 +76,17 @@ Working and used on the air:
 - **Transmit** — confirmed two-way QSO (F4JZW → LW2EDM, 20 m FT8, RR73)
 - **CAT** — slice creation, frequency, mode, PTT, and a TX safety interlock that refuses to
   key when the radio reports transmit is not permitted
+- **RF power** — the power slider sets the radio's RF output (watts, scaled to the PA
+  capability the radio reports); disabled when the radio reports power changes are not
+  permitted
+- **Radio selection** — persisted across restarts; multiple radios on the network are
+  listed as their discovery announcements arrive, and a radio outside the broadcast
+  domain can be entered directly as `host` or `host:port`
 
 Verified on a **FLEX-8400M**, SmartSDR 3.1.0.4, firmware 4.2.20.41343, on macOS.
 
 ### Known limitations
 
-- **RF power control is unavailable.** WSJT-Z's base (WSJT-X 3.0.0) has no
-  `tx_rf_power_level` transceiver interface; the donor's base (3.0.2) does. The power slider
-  is deliberately disabled in Flex mode rather than left looking functional. Set power on the
-  radio.
-- **The radio selection is not persisted** — re-select it in *Settings → Radio* after a
-  restart.
-- **Radio discovery blocks the UI** for up to ~3.5 s while it searches.
 - **You need a free client slot.** If the radio reports *"maximum number of connected clients
   has been reached"*, close another client (SmartSDR, or another API client) first.
 - Tested only on an 8000-series radio so far. The donor was developed against 6000-series.

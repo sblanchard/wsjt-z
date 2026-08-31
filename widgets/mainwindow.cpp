@@ -91,6 +91,7 @@
 #include "models/Bands.hpp"
 #include "Transceiver/TransceiverFactory.hpp"
 #include "Transceiver/NativeFlexTransceiver.hpp"
+#include "Transceiver/NativeFlexRadioSelection.hpp"
 #include "Transceiver/NativeFlexSafetyMonitor.hpp"
 #include "models/StationList.hpp"
 #include "validators/LiveFrequencyValidator.hpp"
@@ -1031,7 +1032,7 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
       if (m_pskReporterView) m_pskReporterView->setFont(font);
     });
 
-  setWindowTitle (program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z) + ")");
+  update_window_title ();
 
 
   connect(&proc_jt9, &QProcess::readyReadStandardOutput, this, &MainWindow::readFromStdout);
@@ -2336,11 +2337,10 @@ void MainWindow::readSettings()
                   "W7PPNativeFlexRfPower")
                   .toInt(&rf_ok);
 
-          // The changes-allowed value itself is unused below (see the
-          // DEVIATION note); only its presence still gates PowerReady.
-          qApp->property(
-              "W7PPNativeFlexRfPowerChangesAllowed")
-              .toInt(&allowed_ok);
+          int const changes_allowed =
+              qApp->property(
+                  "W7PPNativeFlexRfPowerChangesAllowed")
+                  .toInt(&allowed_ok);
 
           // W7PP : all three asynchronous FLEX power
           // properties must exist before PowerReady is latched.
@@ -2365,30 +2365,52 @@ void MainWindow::readSettings()
 
           ui->outAttenuation->setMaximum(max_watts);
 
-          // DEVIATION from W7PP: WSJT-Z's Configuration has no
-          // transceiver_tx_rf_power_level signal and TransceiverBase has
-          // no tx_rf_power_level virtual (already adjudicated for this
-          // port -- see the Task 6 report), so there is no way to carry
-          // an operator-chosen watts value to the radio. The donor
-          // restores the operator's last saved watts, enables the
-          // control, and invites the operator to "Set Native FLEX RF
-          // transmit power" -- correct only in a tree that can actually
-          // deliver that command. Doing the same here would show an
-          // enabled, confidently labelled transmit-power control that
-          // silently does nothing, displaying a wattage the radio was
-          // never actually set to. Transmit power is safety-adjacent: a
-          // control that appears live but isn't is worse than one that
-          // is plainly disabled. So always display the radio's own
-          // reported power (never the saved/operator value), keep the
-          // control disabled unconditionally, and say plainly that RF
-          // power control is unavailable.
+          // W7PP : restore the operator's saved watts when the radio
+          // permits power changes; otherwise show the radio's own
+          // report and keep the control disabled.
+          int display_watts = current_watts;
+
+          if (changes_allowed != 0)
+            {
+              int const saved_watts =
+                  m_settings->value(
+                      "W7PPNativeFlexRfWatts",
+                      current_watts).toInt();
+
+              display_watts =
+                  qBound(0, saved_watts, max_watts);
+            }
+
           m_block_pwr_tooltip = true;
-          ui->outAttenuation->setValue(current_watts);
+          ui->outAttenuation->setValue(display_watts);
           m_block_pwr_tooltip = false;
 
-          ui->outAttenuation->setEnabled(false);
-          ui->outAttenuation->setToolTip(
-              tr("Native FLEX RF power control is not available in this build"));
+          if (changes_allowed != 0)
+            {
+              // Deliver the restored value so slider and radio agree
+              // before the operator takes over.
+              if (display_watts != current_watts)
+                {
+                  m_config.transceiver_tx_rf_power_level(
+                      qBound(
+                          0,
+                          qRound(
+                              double(display_watts)
+                              * 100.0
+                              / double(max_watts)),
+                          100));
+                }
+
+              ui->outAttenuation->setEnabled(true);
+              ui->outAttenuation->setToolTip(
+                  tr("Set Native FLEX RF transmit power"));
+            }
+          else
+            {
+              ui->outAttenuation->setEnabled(false);
+              ui->outAttenuation->setToolTip(
+                  tr("The radio does not currently allow RF power changes"));
+            }
 
           ui->outAttenuation->setProperty(
               "w7ppNativeFlexPowerReady", true);
@@ -3236,6 +3258,19 @@ void MainWindow::showStatusMessage(const QString& statusMsg)
   statusBar()->showMessage(statusMsg, 5000);
 }
 
+// Window title: "<my call> — <program title> (WSJT-Z MOD ...)"; the
+// callsign prefix is elided until one is configured in Settings.
+void MainWindow::update_window_title ()
+{
+  auto title = program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z) + ")";
+  auto const callsign = m_config.my_callsign ();
+  if (!callsign.isEmpty ())
+    {
+      title = callsign + QStringLiteral (" — ") + title;
+    }
+  setWindowTitle (title);
+}
+
 void MainWindow::on_actionSettings_triggered()               //Setup Dialog
 {
   if (m_mode=="FT8") keep_frequency = true;
@@ -3249,6 +3284,7 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
     checkMSK144ContestType();
     if (m_config.my_callsign () != callsign) {
       m_baseCall = Radio::base_callsign (m_config.my_callsign ());
+      update_window_title ();
       ui->tx1->setEnabled (!elide_tx1_not_allowed () && ui->tx1->isEnabled ());
       morse_(const_cast<char *> (m_config.my_callsign ().toLatin1().constData()),
              const_cast<int *> (icw), &m_ncw, (FCL)m_config.my_callsign().length());
@@ -3556,6 +3592,66 @@ void MainWindow::syncFlexVitaReceiver ()
   int const flexGeneration = m_flex_vita_generation;
   ++m_flex_vita_start_attempt;
   m_flex_vita_watchdog_armed = false;
+
+  // W7PP DEVIATION: prefer the operator's explicit radio selection
+  // (Settings -> Select FLEX Radio...), the same source of truth the
+  // Native FLEX CAT backend uses. The donor's SmartSDR-anchored scan
+  // below can only auto-pick when a single FLEX is on the LAN or a
+  // local SmartSDR-Win GUI disambiguates; with several radios and no
+  // SmartSDR it silently never starts, and it can never reach a radio
+  // outside the broadcast domain. The scan remains the fallback when
+  // nothing is selected.
+  {
+    auto const selectedRadio =
+        NativeFlexRadioSelection::selected();
+
+    if (selectedRadio.valid())
+      {
+        // FlexVitaReceiver takes a dotted-quad IPv4; a manually
+        // entered radio may be a hostname, so resolve it here. On
+        // resolution failure fall through to the donor scan.
+        QHostAddress resolved;
+
+        if (!resolved.setAddress(selectedRadio.address))
+          {
+            auto const info =
+                QHostInfo::fromName(selectedRadio.address);
+
+            for (auto const& candidate : info.addresses())
+              {
+                if (QAbstractSocket::IPv4Protocol ==
+                        candidate.protocol())
+                  {
+                    resolved = candidate;
+                    break;
+                  }
+              }
+          }
+
+        if (QAbstractSocket::IPv4Protocol == resolved.protocol())
+          {
+            FlexVitaReceiver::Configuration flexConfig;
+
+            flexConfig.radioAddress =
+                resolved.toString().toStdString();
+            flexConfig.tcpPort = selectedRadio.port;
+            flexConfig.daxChannel = desiredDax;
+            flexConfig.firstUdpPort = 4995;
+            flexConfig.lastUdpPort = 5010;
+
+            dec_data.params.kin = 0;
+            m_flex_last_period_msec = -1;
+            m_flexVitaReceiver->reset();
+            m_flexVitaReceiver->start(flexConfig);
+            m_flex_vita_dax_channel = desiredDax;
+            verifyFlexVitaStart(
+                flexGeneration,
+                static_cast<quint64>(
+                    m_flexVitaReceiver->statistics().vitaPackets));
+            return;
+          }
+      }
+  }
 
           // W7PP :
           // SmartSDR must already be running on this PC.
@@ -13312,15 +13408,20 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
           return;
         }
 
-      // DEVIATION from W7PP: WSJT-Z's Configuration has no
-      // transceiver_tx_rf_power_level signal and TransceiverBase has no
-      // tx_rf_power_level virtual (already adjudicated for this port --
-      // see the Task 6 report), so there is no path from this control
-      // back to the radio. The watts value above is validated (and the
-      // tooltip/focus handling above still runs) but is intentionally
-      // never sent anywhere -- readSettings() keeps this control
-      // unconditionally disabled for the same reason, so in practice
-      // this early return is reached only if that ever changes.
+      // W7PP : deliver the watts as SmartSDR rfpower percent and
+      // remember the operator's choice.
+      m_config.transceiver_tx_rf_power_level(
+          qBound(
+              0,
+              qRound(
+                  double(a)
+                  * 100.0
+                  / double(max_watts)),
+              100));
+
+      m_settings->setValue(
+          "W7PPNativeFlexRfWatts",
+          a);
 
       // Do NOT fall through to SoundOutput attenuation.
       return;

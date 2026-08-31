@@ -252,7 +252,11 @@ int OmniRigTransceiver::do_start ()
         {
           throw_qstring (tr ("OmniRig: don't know how to set rig frequency"));
         }
-      switch (rig_->GetRxFrequency () - test_frequency)
+      // The subtraction is unsigned (Frequency is quint64); the small
+      // negative deltas the cases test for arrive as wrapped bit
+      // patterns. Cast to signed so the negative case labels compare
+      // directly instead of narrowing (a hard error on GCC >= 16).
+      switch (static_cast<qint64> (rig_->GetRxFrequency () - test_frequency))
         {
         case -5: resolution = -1; break;  // 10Hz truncated
         case 5: resolution = 1; break;    // 10Hz rounded

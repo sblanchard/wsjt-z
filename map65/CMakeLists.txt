@@ -1,3 +1,8 @@
+# MAP65 is frozen legacy upstream code; newer GCCs keep finding new
+# -Wall/-Wextra diagnostics in it. Keep the warnings visible but not
+# fatal in this directory only - the main tree stays -Werror.
+add_compile_options (-Wno-error)
+
 set (map65_CXXSRCS
   about.cpp
   astro.cpp

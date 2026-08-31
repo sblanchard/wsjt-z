@@ -215,6 +215,8 @@ set (wsjt_qt_CXXSRCS
   Transceiver/DXLabSuiteCommanderTransceiver.cpp
   Transceiver/TCITransceiver.cpp
   Transceiver/FlexVitaReceiver.cpp
+  Transceiver/NativeFlexDiscovery.cpp
+  Transceiver/NativeFlexRadioDialog.cpp
   Transceiver/NativeFlexRadioSelection.cpp
   Transceiver/NativeFlexTransceiver.cpp
   Transceiver/NativeFlexSafetyMonitor.cpp
@@ -916,10 +918,14 @@ set_property (SOURCE ${all_C_and_CXXSRCS} APPEND PROPERTY OBJECT_DEPENDS ${CMAKE
 
 if (WIN32)
   # generate the OmniRig COM interface source
-  find_program (DUMPCPP dumpcpp)
-  if (DUMPCPP-NOTFOUND)
+  # MSYS2 names the tool dumpcpp-qt5 so Qt5 and Qt6 can coexist. The
+  # original guard tested the literal variable DUMPCPP-NOTFOUND, which
+  # is never set, so a missing tool fell through to a misleading
+  # "install OmniRig" error from the empty execute_process output.
+  find_program (DUMPCPP NAMES dumpcpp dumpcpp-qt5)
+  if (NOT DUMPCPP)
     message (FATAL_ERROR "dumpcpp tool not found")
-  endif (DUMPCPP-NOTFOUND)
+  endif ()
   execute_process (
     COMMAND ${DUMPCPP} -getfile {4FE359C5-A58F-459D-BE95-CA559FB4F270}
     OUTPUT_VARIABLE AXSERVER
@@ -1055,6 +1061,14 @@ set (CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wall -Wextra -fexceptions -frtti")
+
+# GCC >= 16 raises maybe-uninitialized false positives on the
+# intentional placement-new-over-received-buffer pattern HRD wire
+# messages use; clang has no such option, so keep this GNU-only.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties (Transceiver/HRDTransceiver.cpp
+    PROPERTIES COMPILE_FLAGS -Wno-maybe-uninitialized)
+endif ()
 
 if (NOT APPLE)
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-pragmas")
@@ -1522,7 +1536,10 @@ add_library (wsjt_qt STATIC ${wsjt_qt_CXXSRCS} ${wsjt_qt_GENUISRCS} ${GENAXSRCS}
 target_compile_definitions (wsjt_qt PUBLIC UDP_STATIC_DEFINE)
 target_link_libraries (wsjt_qt Hamlib::Hamlib Boost::log qcp Qt5::Widgets Qt5::Network Qt5::Sql Qt5::WebSockets)
 if (WIN32)
-  target_link_libraries (wsjt_qt Qt5::AxContainer Qt5::AxBase)
+  # NativeFlexSafetyMonitor and the FLEX socket shim call Winsock
+  # directly; declaring ws2_32 here orders it after libwsjt_qt.a on
+  # every consumer's link line.
+  target_link_libraries (wsjt_qt Qt5::AxContainer Qt5::AxBase ws2_32)
 endif (WIN32)
 
 # build a library of package Qt functionality used in Fortran utilities
@@ -1808,6 +1825,13 @@ install (FILES
   ALLCALL7.TXT
   DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
+
+# Also stage it into the build directory so running wsjtx straight from
+# the build tree (no install step) finds it: jt9's working directory is
+# m_appDir, which in that layout is the build directory itself. Without
+# this, FT8 decodes silently produce nothing (the decoder's false-decode
+# filtering runs without its callsign DB).
+configure_file (ALLCALL7.TXT ALLCALL7.TXT COPYONLY)
 
 install (DIRECTORY
   example_log_configurations

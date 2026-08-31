@@ -19,6 +19,17 @@ module timer_impl
   real :: total,sum,sumf,ut(MAXCALL),ut0(MAXCALL)
   !$ integer :: j,l,m,ntid(MAXCALL)
 
+  ! Per-thread timer nesting state. This was a /timer_private/ COMMON
+  ! block in timer_common.inc: gfortran lowers a threadprivate COMMON
+  ! to TLS common data, and the PE/COFF assembler has no .tls_common
+  ! pseudo-op, so MinGW builds failed to assemble it. As initialised
+  ! threadprivate module variables the state lowers to ordinary TLS
+  ! sections, and keeping it in this module puts the definition and
+  ! every reference in one translation unit.
+  integer :: level = 0
+  integer :: onlevel(0:10) = 0
+  !$omp threadprivate(level, onlevel)
+
   !
   ! C interoperable callback setup
   !
@@ -64,8 +75,8 @@ contains
     ! k=1 (tstop). Accumulates sums of these times in array ut (user time).
     ! Also traces all calls (for debugging purposes) if limtrace.gt.0
     !
-    ! If this is used with OpenMP than the /timer_private/ common
-    ! block must be copyed into each thread of a thread team by using
+    ! If this is used with OpenMP than the threadprivate level/onlevel
+    ! state must be copyed into each thread of a thread team by using
     ! the copyin() clause on the !$omp parallel directive that creates
     ! the team.
 
@@ -78,7 +89,6 @@ contains
     integer :: n,ndiv,ntrace=0
     !$ integer :: tid
     character(len=8) :: tname
-    include 'timer_common.inc'
 
     !$omp critical(timer)
     if(limtrace.lt.0) go to 999
@@ -246,8 +256,7 @@ contains
     use timer_module, only: timer
     implicit none
     character(len=*), optional, intent(in) :: filename
-    include 'timer_common.inc'
-    data level/0/, onlevel/11 * 0/
+    ! level/onlevel initialisation now lives in the timer_common module.
     if (present (filename)) then
        open (newunit=lu, file=filename, status='unknown')
     else

@@ -1702,6 +1702,16 @@ both here.</string>
             </item>
            </widget>
           </item>
+          <item row="5" column="0" colspan="2">
+           <widget class="QPushButton" name="flex_radio_select_push_button">
+            <property name="toolTip">
+             <string>Discover FLEX radios on the network or connect to one by IP address.</string>
+            </property>
+            <property name="text">
+             <string>Select FLEX Radio...</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>

@@ -127,6 +127,13 @@ void TransceiverBase::set (TransceiverState const& s,
             audio_cmd = true;
             requested_.tune (s.tune ());
           }
+          // W7PP : Native FLEX RF power. No audio_cmd: a power change
+          // must not suppress PTT processing in the same transaction.
+          if (s.tx_rf_power_level () >= 0
+              && requested_.tx_rf_power_level () != s.tx_rf_power_level ()) {
+            do_tx_rf_power_level (s.tx_rf_power_level ());
+            requested_.tx_rf_power_level (s.tx_rf_power_level ());
+          }
           if (!audio_cmd) {
             bool ptt_on {false};
             bool ptt_off {false};

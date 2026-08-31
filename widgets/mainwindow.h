@@ -1149,6 +1149,7 @@ private:
   bool subProcessFailed (QProcess *, int exit_code, QProcess::ExitStatus);
   void subProcessError (QProcess *, QProcess::ProcessError);
   void statusUpdate () const;
+  void update_window_title ();
   void update_watchdog_label ();
   void reset_watchdog_on_click ();
   void invalidate_frequencies_filter ();

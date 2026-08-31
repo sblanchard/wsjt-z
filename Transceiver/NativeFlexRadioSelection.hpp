@@ -33,6 +33,10 @@ namespace NativeFlexRadioSelection
   // No persistent discovery listener.
   bool refresh(QWidget * parent);
 
+  // Seed the session selection without any UI (settings restore,
+  // dialog acceptance).
+  void restore(Radio const& radio);
+
   Radio selected();
   bool hasSelection();
   void clear();

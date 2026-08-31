@@ -491,6 +491,7 @@ public:
   void transceiver_tx_frequency (Frequency);
   void transceiver_mode (MODE);
   void transceiver_ptt (bool);
+  void transceiver_tx_rf_power_level (int);
   void transceiver_audio (bool);
   void transceiver_tune (bool);
   void transceiver_period (double);
@@ -589,6 +590,7 @@ private:
   Q_SLOT void on_force_DTR_combo_box_currentIndexChanged (int);
   Q_SLOT void on_force_RTS_combo_box_currentIndexChanged (int);
   Q_SLOT void on_rig_combo_box_currentIndexChanged (int);
+  Q_SLOT void on_flex_radio_select_push_button_clicked ();
   Q_SLOT void on_add_macro_push_button_clicked (bool = false);
   Q_SLOT void on_delete_macro_push_button_clicked (bool = false);
   Q_SLOT void on_PTT_method_button_group_buttonClicked (int);
@@ -1176,6 +1178,13 @@ void Configuration::transceiver_ptt (bool on)
 {
   LOG_TRACE (on << ' ' << m_->cached_rig_state_);
   m_->transceiver_ptt (on);
+}
+
+// W7PP : Native FLEX RF power, SmartSDR rfpower percent 0-100.
+void Configuration::transceiver_tx_rf_power_level (int level)
+{
+  LOG_TRACE (level << ' ' << m_->cached_rig_state_);
+  m_->transceiver_tx_rf_power_level (level);
 }
 
 void Configuration::transceiver_audio (bool on)
@@ -1985,6 +1994,20 @@ void Configuration::impl::read_settings ()
   w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();
   if (w7pp_flex_dax_channel_ < 1 || w7pp_flex_dax_channel_ > 8)
     w7pp_flex_dax_channel_ = 1;
+
+  // W7PP : restore the persisted Native FLEX radio selection.
+  {
+    NativeFlexRadioSelection::Radio radio;
+    radio.model = settings_->value ("FlexNativeRadioModel").toString ();
+    radio.serial = settings_->value ("FlexNativeRadioSerial").toString ();
+    radio.address = settings_->value ("FlexNativeRadioAddress").toString ();
+    radio.port = static_cast<quint16> (
+        settings_->value ("FlexNativeRadioPort", 4992).toUInt ());
+    if (radio.valid ())
+      {
+        NativeFlexRadioSelection::restore (radio);
+      }
+  }
   LOG_INFO(QString{"Configuration Settings (%1)"}.arg(settings_->fileName()));
   QStringList keys = settings_->allKeys();
   //Q_FOREACH (auto const& item, keys)
@@ -2284,6 +2307,11 @@ void Configuration::impl::update_w7pp_flex_rx_controls (QString const& rig_name)
   ui_->sound_input_channel_combo_box->setEnabled (!native);
   ui_->w7pp_flex_dax_channel_label->setEnabled (native);
   ui_->w7pp_flex_dax_channel_combo_box->setEnabled (native);
+
+  // W7PP : the radio picker applies whenever the Native FLEX rig is
+  // selected, independent of the chosen RX method.
+  ui_->flex_radio_select_push_button->setEnabled (
+      rig_name == "Flex Native VITA-49");
 }
 
 void Configuration::impl::find_audio_devices ()
@@ -2320,6 +2348,18 @@ void Configuration::impl::write_settings ()
   SettingsGroup g {settings_, "Configuration"};
   settings_->setValue ("W7PPFlexNativeRx", w7pp_flex_native_rx_);
   settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);
+
+  // W7PP : persist the Native FLEX radio selection.
+  {
+    auto const radio = NativeFlexRadioSelection::selected ();
+    if (radio.valid ())
+      {
+        settings_->setValue ("FlexNativeRadioModel", radio.model);
+        settings_->setValue ("FlexNativeRadioSerial", radio.serial);
+        settings_->setValue ("FlexNativeRadioAddress", radio.address);
+        settings_->setValue ("FlexNativeRadioPort", radio.port);
+      }
+  }
 
   settings_->setValue ("MyCall", my_callsign_);
   settings_->setValue ("MyGrid", my_grid_);
@@ -3355,8 +3395,20 @@ void Configuration::impl::on_rig_combo_box_currentIndexChanged (int /* index */)
   // Every other radio continues through stock WSJT-X logic.
   if (ui_->rig_combo_box->currentText() == "Flex Native VITA-49")
     {
-      NativeFlexRadioSelection::refresh(this);
+      // A persisted or session selection stands; the "Select FLEX
+      // Radio..." button is the way to change it.
+      if (!NativeFlexRadioSelection::hasSelection())
+        {
+          NativeFlexRadioSelection::refresh(this);
+        }
     }
+}
+
+// W7PP : explicit radio picker; also the way to switch between
+// multiple FLEX radios or enter an address directly.
+void Configuration::impl::on_flex_radio_select_push_button_clicked ()
+{
+  NativeFlexRadioSelection::refresh (this);
 }
 
 void Configuration::impl::on_CAT_data_bits_button_group_buttonClicked (int /* id */)
@@ -4211,6 +4263,17 @@ void Configuration::impl::transceiver_ptt (bool on)
   cached_rig_state_.ptt (on);
   // qDebug () << "Configuration::impl::transceiver_ptt: n:" << transceiver_command_number_ + 1 << "on:" << on;
   LOG_TRACE ("emitting set_transceiver: requested state:" << cached_rig_state_);
+  Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
+}
+
+// W7PP : Native FLEX RF power. The level persists in the cached
+// state; TransceiverBase change-detection makes unrelated later
+// transactions carrying the same value a no-op.
+void Configuration::impl::transceiver_tx_rf_power_level (int level)
+{
+  cached_rig_state_.online (true);
+  set_cached_mode ();
+  cached_rig_state_.tx_rf_power_level (level);
   Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
 }
 

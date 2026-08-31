@@ -64,14 +64,23 @@ foreach (_comp ${_components})
   endif (_comp STREQUAL "single")
 endforeach (_comp ${_components})
 
-# If using threads, we need to link against threaded libraries as well - except on Windows.
-if (NOT WIN32 AND _use_threads)
+# If using threads, we need to link against threaded libraries as
+# well. On Windows a combined-threads FFTW (e.g. the official DLLs
+# the JTSDK environment uses) carries the threads API inside the main
+# library, while MinGW/MSYS2 builds ship separate *_threads libraries
+# - so on Windows search for them but treat them as optional.
+set (_optional_libraries)
+if (_use_threads)
   set (_thread_libs)
   foreach (_lib ${_libraries})
     list (APPEND _thread_libs ${_lib}_threads)
   endforeach (_lib ${_libraries})
-  set (_libraries ${_thread_libs} ${_libraries})
-endif (NOT WIN32 AND _use_threads)
+  if (WIN32)
+    set (_optional_libraries ${_thread_libs})
+  else ()
+    set (_libraries ${_thread_libs} ${_libraries})
+  endif ()
+endif (_use_threads)
 
 # Keep a list of variable names that we need to pass on to
 # find_package_handle_standard_args().
@@ -87,8 +96,20 @@ foreach (_lib ${_libraries})
   list (APPEND _check_list ${_LIB}_LIBRARY)
 endforeach (_lib ${_libraries})
 
+# Optional libraries: linked when present (before the base libraries,
+# as static archives require), never a failure when absent.
+foreach (_lib ${_optional_libraries})
+  string (TOUPPER ${_lib} _LIB)
+  find_library (${_LIB}_LIBRARY NAMES ${_lib} ${_lib}-3
+    HINTS ${FFTW3_ROOT_DIR} PATH_SUFFIXES lib)
+  mark_as_advanced (${_LIB}_LIBRARY)
+  if (${_LIB}_LIBRARY)
+    list (INSERT FFTW3_LIBRARIES 0 ${${_LIB}_LIBRARY})
+  endif ()
+endforeach (_lib ${_optional_libraries})
+
 # Search for the header file.
-find_path (FFTW3_INCLUDE_DIR fftw3.h 
+find_path (FFTW3_INCLUDE_DIR fftw3.h
   HINTS ${FFTW3_ROOT_DIR} PATH_SUFFIXES include)
 mark_as_advanced (FFTW3_INCLUDE_DIR)
 list(APPEND _check_list FFTW3_INCLUDE_DIR)

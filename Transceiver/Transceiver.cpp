@@ -18,8 +18,9 @@ QDebug operator << (QDebug d, Transceiver::TransceiverState const& s)
     << " Frequency {" << s.rx_frequency_ << "Hz, " << s.tx_frequency_ << "Hz} " << s.mode_
     << "; SPLIT: " << (Transceiver::TransceiverState::Split::on == s.split_ ? "on" : Transceiver::TransceiverState::Split::off == s.split_ ? "off" : "unknown")
     << "; PTT: " << (s.ptt_ ? "on" : "off")
+    << "; RFPWR: " << s.tx_rf_power_level_
     << ')';
-  return d.space (); 
+  return d.space ();
 }
 #endif
 
@@ -36,6 +37,7 @@ std::ostream& operator << (std::ostream& os, Transceiver::TransceiverState const
     << " Frequency {" << s.rx_frequency_ << "Hz, " << s.tx_frequency_ << "Hz} Mode: " << s.mode_
     << "; SPLIT: " << (Transceiver::TransceiverState::Split::on == s.split_ ? "on" : Transceiver::TransceiverState::Split::off == s.split_ ? "off" : "unknown")
     << "; PTT: " << (s.ptt_ ? "on" : "off")
+    << "; RFPWR: " << s.tx_rf_power_level_
     << ')';
 }
 

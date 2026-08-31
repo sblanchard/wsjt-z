@@ -5,7 +5,8 @@
 if (WIN32)
   include (CMakeParseArguments)
 
-  find_program (DUMPCPP_Executable dumpcpp.exe)
+  # MSYS2 names the tool dumpcpp-qt5.exe so Qt5 and Qt6 can coexist.
+  find_program (DUMPCPP_Executable NAMES dumpcpp.exe dumpcpp-qt5.exe)
 
   # wrap_ax_server (outfiles inputfile ...)
 
