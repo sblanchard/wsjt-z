@@ -1536,7 +1536,10 @@ add_library (wsjt_qt STATIC ${wsjt_qt_CXXSRCS} ${wsjt_qt_GENUISRCS} ${GENAXSRCS}
 target_compile_definitions (wsjt_qt PUBLIC UDP_STATIC_DEFINE)
 target_link_libraries (wsjt_qt Hamlib::Hamlib Boost::log qcp Qt5::Widgets Qt5::Network Qt5::Sql Qt5::WebSockets)
 if (WIN32)
-  target_link_libraries (wsjt_qt Qt5::AxContainer Qt5::AxBase)
+  # NativeFlexSafetyMonitor and the FLEX socket shim call Winsock
+  # directly; declaring ws2_32 here orders it after libwsjt_qt.a on
+  # every consumer's link line.
+  target_link_libraries (wsjt_qt Qt5::AxContainer Qt5::AxBase ws2_32)
 endif (WIN32)
 
 # build a library of package Qt functionality used in Fortran utilities
