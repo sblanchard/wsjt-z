@@ -159,6 +159,17 @@ jobs:
       - name: Install Hamlib
         run: tar -xf hamlib-mingw64.tar -C /mingw64
 
+      # The Windows configure generates an OmniRig COM wrapper with
+      # dumpcpp, which needs OmniRig's typelib registered on the
+      # machine (JTSDK build environments have it preinstalled).
+      - name: Install OmniRig
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.dxatlas.com/OmniRig/Files/OmniRig.zip" -OutFile omnirig.zip
+          Expand-Archive omnirig.zip -DestinationPath omnirig-setup
+          $setup = Get-ChildItem -Recurse omnirig-setup -Filter *.exe | Select-Object -First 1
+          Start-Process -Wait -FilePath $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART"
+
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja ${CMAKE_COMMON_FLAGS}
