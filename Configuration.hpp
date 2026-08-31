@@ -326,6 +326,9 @@ public:
   // frequency changes.
   Q_SLOT void transceiver_ptt (bool = true);
 
+  // W7PP : Native FLEX RF power, SmartSDR rfpower percent 0-100.
+  Q_SLOT void transceiver_tx_rf_power_level (int level);
+
   // Attempt to (re-)synchronise transceiver state.
   //
   // Force signal guarantees either a transceiver_update or a

@@ -491,6 +491,7 @@ public:
   void transceiver_tx_frequency (Frequency);
   void transceiver_mode (MODE);
   void transceiver_ptt (bool);
+  void transceiver_tx_rf_power_level (int);
   void transceiver_audio (bool);
   void transceiver_tune (bool);
   void transceiver_period (double);
@@ -1176,6 +1177,13 @@ void Configuration::transceiver_ptt (bool on)
 {
   LOG_TRACE (on << ' ' << m_->cached_rig_state_);
   m_->transceiver_ptt (on);
+}
+
+// W7PP : Native FLEX RF power, SmartSDR rfpower percent 0-100.
+void Configuration::transceiver_tx_rf_power_level (int level)
+{
+  LOG_TRACE (level << ' ' << m_->cached_rig_state_);
+  m_->transceiver_tx_rf_power_level (level);
 }
 
 void Configuration::transceiver_audio (bool on)
@@ -4211,6 +4219,17 @@ void Configuration::impl::transceiver_ptt (bool on)
   cached_rig_state_.ptt (on);
   // qDebug () << "Configuration::impl::transceiver_ptt: n:" << transceiver_command_number_ + 1 << "on:" << on;
   LOG_TRACE ("emitting set_transceiver: requested state:" << cached_rig_state_);
+  Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
+}
+
+// W7PP : Native FLEX RF power. The level persists in the cached
+// state; TransceiverBase change-detection makes unrelated later
+// transactions carrying the same value a no-op.
+void Configuration::impl::transceiver_tx_rf_power_level (int level)
+{
+  cached_rig_state_.online (true);
+  set_cached_mode ();
+  cached_rig_state_.tx_rf_power_level (level);
   Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
 }
 
