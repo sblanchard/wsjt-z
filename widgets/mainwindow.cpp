@@ -4339,7 +4339,15 @@ void MainWindow::on_autoButton_clicked (bool checked)
   // Clicking Enable Tx is the operator saying "transmit anyway", so it
   // ends the antenna settle hold. Placed after the safety-trip guard
   // above: a refused request must not clear the hold.
-  if (checked) {
+  //
+  // Only the operator's own click counts. WSJT-Z enables Tx on its own
+  // initiative all over this file -- switchBand() itself does it a few
+  // statements after arming the hold whenever Auto CQ is checked -- and
+  // those calls arrive here through auto_tx_mode(), which sets
+  // m_programmaticAutoTx. Treating them as an override would cancel the
+  // hold within milliseconds of arming it and make the feature inert in
+  // exactly the band-hopping case it exists for.
+  if (checked && !m_programmaticAutoTx) {
       m_bandSettleGate.override_hold ();
   }
   // Z
@@ -4388,6 +4396,24 @@ void MainWindow::auto_tx_mode (bool state)
   if (state) tx_watchdog(false);
 
   if (!state && ui->cbAutoCQ->isChecked()) return;
+
+  // Mark this as WSJT-Z's own decision, not the operator's click, for
+  // the whole of on_autoButton_clicked() -- including its early return
+  // in the Native FLEX safety-trip guard. setChecked() emits toggled(),
+  // not clicked(), so the direct call below is the only programmatic
+  // route into that handler.
+  struct ProgrammaticAutoTxScope
+  {
+    explicit ProgrammaticAutoTxScope (bool& flag)
+      : flag_ {flag}
+      , saved_ {flag}
+    {
+      flag_ = true;
+    }
+    ~ProgrammaticAutoTxScope () {flag_ = saved_;}
+    bool& flag_;
+    bool const saved_;
+  } programmatic {m_programmaticAutoTx};
 
   ui->autoButton->setChecked (state);
   on_autoButton_clicked (state);

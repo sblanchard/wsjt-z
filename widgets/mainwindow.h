@@ -577,6 +577,13 @@ private:
   BandSettleGate m_bandSettleGate;
   FlexBandLevels m_flexBandLevels;
   bool m_deferredAutoTune {false};
+  // When the deferred auto-tune was recorded, so a deferral that is
+  // never consumed can be dropped instead of banked indefinitely.
+  qint64 m_deferredAutoTuneAt {0};
+  // True only while auto_tx_mode() is driving on_autoButton_clicked()
+  // itself. Distinguishes WSJT-Z enabling Tx from the operator
+  // clicking Enable Tx, which is the antenna settle hold's override.
+  bool m_programmaticAutoTx {false};
   int m_lastLevelPollSec {-1};
   bool m_WSPR_tx_next;
   MessageBox m_rigErrorMessageBox;
