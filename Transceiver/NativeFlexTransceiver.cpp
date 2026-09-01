@@ -83,6 +83,41 @@ void NativeFlexTransceiver::do_dax_gain(int gain, bool tx)
       throw error {"Native FLEX DAX gain out of range"};
     }
 
+  /*
+   * DELIBERATELY DISABLED pending verification against a real radio.
+   *
+   * Neither command below has ever been confirmed against hardware,
+   * and unlike the unverified *status* field names -- which merely
+   * fail to populate, and so fail closed -- a wrong write fails OPEN
+   * and changes the radio.
+   *
+   * TX: "dax tx <n>" is, as far as is known, SmartSDR's enable/disable
+   * boolean for DAX transmit, not a gain. If that is right, arriving at
+   * a band whose stored DaxTxGain is 0 would send "dax tx 0", disable
+   * DAX transmit, and put WSJT-Z silently off the air -- automatically,
+   * driven by the band hopper, with no error anywhere.
+   *
+   * RX: "audio stream 0x<dax_channel_> ..." addresses a resource by a
+   * guessed identifier. dax_channel_ is a DAX channel number (1-8), not
+   * an audio stream handle, so this very probably names some other
+   * client's stream. Commit 5efff7b removed a slice-0 fallback for
+   * exactly this reason.
+   *
+   * To re-enable, BOTH must be settled in a radio session:
+   *   - the correct SmartSDR command form for DAX TX gain (and whether
+   *     "dax tx <n>" really is the enable/disable boolean);
+   *   - the correct SmartSDR command form for DAX RX gain, plus a real
+   *     RX stream handle captured from the status stream the way
+   *     dax_tx_stream_id_ already is, with the command gated on it
+   *     being non-zero -- mirroring the TX branch below.
+   *
+   * Everything around this stays live: the per-band store, capture,
+   * persistence, migration and the whole antenna settle feature. Only
+   * these two pushes are dark.
+   */
+
+  QString would_send;
+
   if (tx)
     {
       if (!dax_tx_stream_id_)
@@ -90,35 +125,35 @@ void NativeFlexTransceiver::do_dax_gain(int gain, bool tx)
           return;
         }
 
-      // Unverified against hardware: needs confirming that "dax tx
-      // <n>" is the correct SmartSDR command for DAX TX gain, and
-      // whether it should instead be addressed by dax_tx_stream_id_.
-      send_command(
+      would_send =
           QStringLiteral("dax tx %1")
-              .arg(gain));
-      return;
+              .arg(gain);
     }
-
-  if (slice_id_ < 0)
+  else
     {
-      // No slice yet: slice 0 is a real, commonly-first-created FLEX
-      // slice, not a "no slice" sentinel, so this must not fall back
-      // to it -- doing so could mutate a slice owned by another
-      // client. The level is re-pushed on the next band arrival.
-      return;
+      if (slice_id_ < 0)
+        {
+          // No slice yet: slice 0 is a real, commonly-first-created
+          // FLEX slice, not a "no slice" sentinel, so this must not
+          // fall back to it -- doing so could mutate a slice owned by
+          // another client. The level is re-pushed on the next band
+          // arrival.
+          return;
+        }
+
+      would_send =
+          QStringLiteral("audio stream 0x%1 slice %2 gain %3")
+              .arg(dax_channel_, 0, 16)
+              .arg(slice_id_)
+              .arg(gain);
     }
 
-  // Unverified against hardware, and likely wrong: dax_channel_ is a
-  // DAX channel number (1-8), not an audio stream handle, so
-  // addressing it as "audio stream 0x<dax_channel_>" is very
-  // probably not the correct SmartSDR stream identifier. Needs
-  // checking against a real radio which command (and which
-  // identifier) actually sets DAX RX gain for a slice.
-  send_command(
-      QStringLiteral("audio stream 0x%1 slice %2 gain %3")
-          .arg(dax_channel_, 0, 16)
-          .arg(slice_id_)
-          .arg(gain));
+  // qWarning() rather than CAT_TRACE: this is what the first radio
+  // session needs to see in the log to confirm or correct the strings.
+  qWarning()
+      << "Native FLEX: DAX gain command suppressed pending hardware"
+         " verification, would have sent:"
+      << would_send;
 }
 
 void NativeFlexTransceiver::capture_owned_slice(
