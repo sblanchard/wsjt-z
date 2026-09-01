@@ -52,6 +52,66 @@ void NativeFlexTransceiver::do_tx_rf_power_level(int level)
       QStringLiteral("transmit set rfpower=%1").arg(level));
 }
 
+void NativeFlexTransceiver::do_slice_af_gain(int gain)
+{
+  if (gain < 0 || gain > 100)
+    {
+      throw error {"Native FLEX slice audio gain out of range"};
+    }
+
+  if (slice_id_ < 0)
+    {
+      // No slice yet: the level is re-pushed on the next band arrival.
+      return;
+    }
+
+  // Unverified against hardware: command shape mirrors the working
+  // "transmit set rfpower=" command above, but has not been checked
+  // against a real radio. Needs confirming that "slice s <id>
+  // audio_gain=<n>" is the correct SmartSDR command for slice RX
+  // audio gain.
+  send_command(
+      QStringLiteral("slice s %1 audio_gain=%2")
+          .arg(slice_id_)
+          .arg(gain));
+}
+
+void NativeFlexTransceiver::do_dax_gain(int gain, bool tx)
+{
+  if (gain < 0 || gain > 100)
+    {
+      throw error {"Native FLEX DAX gain out of range"};
+    }
+
+  if (tx)
+    {
+      if (!dax_tx_stream_id_)
+        {
+          return;
+        }
+
+      // Unverified against hardware: needs confirming that "dax tx
+      // <n>" is the correct SmartSDR command for DAX TX gain, and
+      // whether it should instead be addressed by dax_tx_stream_id_.
+      send_command(
+          QStringLiteral("dax tx %1")
+              .arg(gain));
+      return;
+    }
+
+  // Unverified against hardware, and likely wrong: dax_channel_ is a
+  // DAX channel number (1-8), not an audio stream handle, so
+  // addressing it as "audio stream 0x<dax_channel_>" is very
+  // probably not the correct SmartSDR stream identifier. Needs
+  // checking against a real radio which command (and which
+  // identifier) actually sets DAX RX gain for a slice.
+  send_command(
+      QStringLiteral("audio stream 0x%1 slice %2 gain %3")
+          .arg(dax_channel_, 0, 16)
+          .arg(slice_id_ < 0 ? 0 : slice_id_)
+          .arg(gain));
+}
+
 void NativeFlexTransceiver::capture_owned_slice(
     QByteArray const& line)
 {

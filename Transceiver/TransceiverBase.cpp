@@ -134,6 +134,24 @@ void TransceiverBase::set (TransceiverState const& s,
             do_tx_rf_power_level (s.tx_rf_power_level ());
             requested_.tx_rf_power_level (s.tx_rf_power_level ());
           }
+          // Gains follow the power rule: no audio_cmd, so a gain
+          // change cannot suppress PTT processing in the same
+          // transaction.
+          if (s.slice_af_gain () >= 0
+              && requested_.slice_af_gain () != s.slice_af_gain ()) {
+            do_slice_af_gain (s.slice_af_gain ());
+            requested_.slice_af_gain (s.slice_af_gain ());
+          }
+          if (s.dax_rx_gain () >= 0
+              && requested_.dax_rx_gain () != s.dax_rx_gain ()) {
+            do_dax_gain (s.dax_rx_gain (), false);
+            requested_.dax_rx_gain (s.dax_rx_gain ());
+          }
+          if (s.dax_tx_gain () >= 0
+              && requested_.dax_tx_gain () != s.dax_tx_gain ()) {
+            do_dax_gain (s.dax_tx_gain (), true);
+            requested_.dax_tx_gain (s.dax_tx_gain ());
+          }
           if (!audio_cmd) {
             bool ptt_on {false};
             bool ptt_off {false};

@@ -55,6 +55,8 @@ private:
   void do_mode(MODE) override;
   void do_ptt(bool) override;
   void do_tx_rf_power_level(int) override;
+  void do_slice_af_gain(int) override;
+  void do_dax_gain(int, bool) override;
 
   void capture_owned_slice(QByteArray const& line);
   void capture_dax_tx_stream(QByteArray const& line);

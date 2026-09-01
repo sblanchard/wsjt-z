@@ -18,6 +18,9 @@ namespace
     }
 
     QList<int> power_calls;
+    QList<int> af_calls;
+    QList<int> dax_rx_calls;
+    QList<int> dax_tx_calls;
 
   protected:
     int do_start () override {return 1;}
@@ -29,6 +32,15 @@ namespace
     void do_tx_rf_power_level (int level) override
     {
       power_calls.append (level);
+    }
+    void do_slice_af_gain (int value) override
+    {
+      af_calls.append (value);
+    }
+    void do_dax_gain (int value, bool tx) override
+    {
+      if (tx) dax_tx_calls.append (value);
+      else dax_rx_calls.append (value);
     }
   };
 }
@@ -84,6 +96,59 @@ private slots:
     state.tx_rf_power_level (85);
     rig.set (state, 5);
     QCOMPARE (rig.power_calls, QList<int> {} << 40 << 85);
+  }
+
+  void gain_state_defaults_to_unset ()
+  {
+    Transceiver::TransceiverState state;
+    QCOMPARE (state.slice_af_gain (), -1);
+    QCOMPARE (state.dax_rx_gain (), -1);
+    QCOMPARE (state.dax_tx_gain (), -1);
+  }
+
+  void gains_not_in_state_comparison ()
+  {
+    Transceiver::TransceiverState a;
+    Transceiver::TransceiverState b;
+    b.slice_af_gain (50);
+    b.dax_rx_gain (20);
+    b.dax_tx_gain (30);
+    QVERIFY (!(a != b));
+  }
+
+  void dispatches_only_changed_nonnegative_gains ()
+  {
+    Transceiver::logger_type logger;
+    RecordingTransceiver rig {&logger};
+
+    rig.start (1);
+
+    Transceiver::TransceiverState state;
+    state.online (true);
+
+    rig.set (state, 2);
+    QCOMPARE (rig.af_calls.size (), 0);
+    QCOMPARE (rig.dax_rx_calls.size (), 0);
+    QCOMPARE (rig.dax_tx_calls.size (), 0);
+
+    state.slice_af_gain (50);
+    state.dax_rx_gain (20);
+    state.dax_tx_gain (30);
+    rig.set (state, 3);
+    QCOMPARE (rig.af_calls, QList<int> {} << 50);
+    QCOMPARE (rig.dax_rx_calls, QList<int> {} << 20);
+    QCOMPARE (rig.dax_tx_calls, QList<int> {} << 30);
+
+    // Unchanged: not re-dispatched.
+    rig.set (state, 4);
+    QCOMPARE (rig.af_calls.size (), 1);
+    QCOMPARE (rig.dax_rx_calls.size (), 1);
+    QCOMPARE (rig.dax_tx_calls.size (), 1);
+
+    state.slice_af_gain (75);
+    rig.set (state, 5);
+    QCOMPARE (rig.af_calls, QList<int> {} << 50 << 75);
+    QCOMPARE (rig.dax_rx_calls.size (), 1);
   }
 };
 

@@ -115,6 +115,14 @@ protected:
   // W7PP : Native FLEX RF power (SmartSDR rfpower percent 0-100).
   // Default no-op so only rigs with real support implement it.
   virtual void do_tx_rf_power_level (int) {}
+
+  // Native FLEX slice receive audio gain (SmartSDR audio_gain 0-100).
+  // Default no-op so only rigs with real support implement it.
+  virtual void do_slice_af_gain (int) {}
+
+  // Native FLEX DAX stream gain, tx selecting the TX stream over RX.
+  virtual void do_dax_gain (int, bool) {}
+
   virtual void do_post_ptt (bool = true) {}
 
   virtual bool do_pre_update () {return true;}

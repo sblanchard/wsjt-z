@@ -492,6 +492,8 @@ public:
   void transceiver_mode (MODE);
   void transceiver_ptt (bool);
   void transceiver_tx_rf_power_level (int);
+  void transceiver_slice_af_gain (int);
+  void transceiver_dax_gain (int, bool);
   void transceiver_audio (bool);
   void transceiver_tune (bool);
   void transceiver_period (double);
@@ -1194,6 +1196,18 @@ void Configuration::transceiver_tx_rf_power_level (int level)
 {
   LOG_TRACE (level << ' ' << m_->cached_rig_state_);
   m_->transceiver_tx_rf_power_level (level);
+}
+
+void Configuration::transceiver_slice_af_gain (int gain)
+{
+  LOG_TRACE (gain << ' ' << m_->cached_rig_state_);
+  m_->transceiver_slice_af_gain (gain);
+}
+
+void Configuration::transceiver_dax_gain (int gain, bool tx)
+{
+  LOG_TRACE (gain << ' ' << tx << ' ' << m_->cached_rig_state_);
+  m_->transceiver_dax_gain (gain, tx);
 }
 
 void Configuration::transceiver_audio (bool on)
@@ -4298,6 +4312,23 @@ void Configuration::impl::transceiver_tx_rf_power_level (int level)
   cached_rig_state_.online (true);
   set_cached_mode ();
   cached_rig_state_.tx_rf_power_level (level);
+  Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
+}
+
+void Configuration::impl::transceiver_slice_af_gain (int gain)
+{
+  cached_rig_state_.online (true);
+  set_cached_mode ();
+  cached_rig_state_.slice_af_gain (gain);
+  Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
+}
+
+void Configuration::impl::transceiver_dax_gain (int gain, bool tx)
+{
+  cached_rig_state_.online (true);
+  set_cached_mode ();
+  if (tx) cached_rig_state_.dax_tx_gain (gain);
+  else cached_rig_state_.dax_rx_gain (gain);
   Q_EMIT set_transceiver (cached_rig_state_, ++transceiver_command_number_);
 }
 

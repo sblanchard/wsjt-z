@@ -338,6 +338,12 @@ public:
   // W7PP : Native FLEX RF power, SmartSDR rfpower percent 0-100.
   Q_SLOT void transceiver_tx_rf_power_level (int level);
 
+  // Native FLEX slice receive audio gain, SmartSDR audio_gain 0-100.
+  Q_SLOT void transceiver_slice_af_gain (int gain);
+
+  // Native FLEX DAX stream gain, tx selecting the TX stream over RX.
+  Q_SLOT void transceiver_dax_gain (int gain, bool tx);
+
   // Attempt to (re-)synchronise transceiver state.
   //
   // Force signal guarantees either a transceiver_update or a

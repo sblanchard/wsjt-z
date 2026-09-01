@@ -109,6 +109,9 @@ public:
       , jtmode_ {"FT8"}  //w3sz tci
       , fastmode_ {false}  //w3sz tci
       , tx_rf_power_level_ {-1}  // W7PP : Native FLEX
+      , slice_af_gain_ {-1}
+      , dax_rx_gain_ {-1}
+      , dax_tx_gain_ {-1}
     {
     }
 
@@ -141,6 +144,9 @@ public:
     QString jtmode () const {return jtmode_;}  //w3sz tci
     bool fastmode () const {return fastmode_;}  //w3sz tci
     int tx_rf_power_level () const {return tx_rf_power_level_;}  // W7PP : Native FLEX
+    int slice_af_gain () const {return slice_af_gain_;}
+    int dax_rx_gain () const {return dax_rx_gain_;}
+    int dax_tx_gain () const {return dax_tx_gain_;}
 
     void online (bool state) {online_ = state;}
     void frequency (Frequency f) {rx_frequency_ = f;}
@@ -171,6 +177,9 @@ public:
     void jtmode(QString jtmode) {jtmode_ = jtmode;}  //w3sz tci
     void fastmode(bool fastmode) {fastmode_ = fastmode;}  //w3sz tci
     void tx_rf_power_level (int level) {tx_rf_power_level_ = level;}  // W7PP : Native FLEX
+    void slice_af_gain (int v) {slice_af_gain_ = v;}
+    void dax_rx_gain (int v) {dax_rx_gain_ = v;}
+    void dax_tx_gain (int v) {dax_tx_gain_ = v;}
 
   private:
     bool online_;
@@ -205,6 +214,11 @@ public:
     // Client-only command field like audio_/tune_: deliberately NOT
     // part of operator!= (which compares rig-reported state only).
     int tx_rf_power_level_;
+    // Client-only command fields, same rationale as tx_rf_power_level_
+    // above: deliberately NOT part of operator!=.
+    int slice_af_gain_;
+    int dax_rx_gain_;
+    int dax_tx_gain_;
     // Don't forget to update the debug print and != operator if you
     // add more members here
 
