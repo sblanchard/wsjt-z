@@ -8535,6 +8535,40 @@ void MainWindow::guiUpdate()
       pollFlexBandLevels ();
   }
 
+  // Antenna settle bookkeeping, on every tick. It must not live inside
+  // the "m_transmitting or m_auto or m_tune" block below: switchBand()
+  // opens by clicking stopTxButton, which clears m_auto, so with Auto
+  // CQ unchecked nothing re-enables it and that block is never entered.
+  // A deferred tune would then sit banked until the operator next
+  // enabled Tx and fire as an unsolicited carrier -- and the mode-family
+  // disarm below would never run either.
+  {
+      qint64 const settle_now = QDateTime::currentMSecsSinceEpoch ();
+
+      if (m_mode != "FT8" && m_mode != "FT4" && m_mode != "FT2") {
+          m_bandSettleGate.disarm ();
+          m_deferredAutoTune = false;
+      }
+
+      if (m_deferredAutoTune) {
+          // A deferral is meant to be consumed one settle time after it
+          // is recorded. Give it twice that, then drop it: banking it
+          // indefinitely is how it becomes a surprise carrier later.
+          int const settle_ms = m_config.band_settle_ms ();
+          qint64 const stale_after =
+              2 * qint64 (settle_ms > 0 ? settle_ms : 30000);
+
+          if (settle_now - m_deferredAutoTuneAt > stale_after) {
+              m_deferredAutoTune = false;
+          } else if (!m_bandSettleGate.active (settle_now)) {
+              m_deferredAutoTune = false;
+              ui->tuneButton->setChecked (true);
+              on_tuneButton_clicked (true);
+              tuneButtonTimer.start (4000);
+          }
+      }
+  }
+
   // Reset FT8 MTD dedup buffer on period boundaries (~2 s before the cycle's
   // early decode fires). Mirrors wsjtx-improved:8296. Paired with removing the
   // reset inside decode(), which was wiping the buffer between the early and
@@ -8696,18 +8730,6 @@ void MainWindow::guiUpdate()
     if(m_ntx == 6) txMsg=ui->tx6->text();
     int msgLength=txMsg.trimmed().length();
     if(msgLength==0 and !m_tune) on_stopTxButton_clicked();
-
-    if (m_mode != "FT8" && m_mode != "FT4" && m_mode != "FT2") {
-        m_bandSettleGate.disarm ();
-        m_deferredAutoTune = false;
-    }
-    qint64 const settle_now = QDateTime::currentMSecsSinceEpoch();
-    if (m_deferredAutoTune && !m_bandSettleGate.active (settle_now)) {
-        m_deferredAutoTune = false;
-        ui->tuneButton->setChecked (true);
-        on_tuneButton_clicked (true);
-        tuneButtonTimer.start (4000);
-    }
 
     if(g_iptt==0 and ((m_bTxTime and (fTR < 0.75) and (msgLength>0)) or m_tune)
        and !m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch())) {
@@ -17843,6 +17865,7 @@ void MainWindow::switchBand(int row) {
             if (settling) {
                 // Fired by guiUpdate() when the hold expires.
                 m_deferredAutoTune = true;
+                m_deferredAutoTuneAt = QDateTime::currentMSecsSinceEpoch ();
             } else {
                 ui->tuneButton->setChecked (true);
                 on_tuneButton_clicked (true);
