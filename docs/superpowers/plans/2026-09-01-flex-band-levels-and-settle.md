@@ -393,7 +393,7 @@ The widget is in seconds and the accessor is in milliseconds; the conversion hap
 
 - [ ] **Step 4: Read, write, and populate the setting**
 
-In `Configuration.cpp::impl::read_settings()`, next to line 1994 (`w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();`):
+In `Configuration::impl::read_settings ()` (begins `Configuration.cpp:1990`), next to line 1994 (`w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();`):
 
 ```cpp
   band_settle_ms_ = settings_->value ("BandSettleMs", 30000).toInt ();
@@ -401,33 +401,33 @@ In `Configuration.cpp::impl::read_settings()`, next to line 1994 (`w7pp_flex_dax
     band_settle_ms_ = 30000;
 ```
 
-In `write_settings()`, next to line 2350 (`settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);`):
+In `Configuration::impl::write_settings ()` (begins `Configuration.cpp:2346`), next to line 2350 (`settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);`):
 
 ```cpp
   settings_->setValue ("BandSettleMs", band_settle_ms_);
 ```
 
-In `initialize_models()`, next to line 1849 (`ui_->w7pp_flex_dax_channel_combo_box->setCurrentIndex (...)`):
+In `Configuration::impl::initialize_models ()` (begins `Configuration.cpp:1777`), next to line 1849 (`ui_->w7pp_flex_dax_channel_combo_box->setCurrentIndex (...)`):
 
 ```cpp
   ui_->band_settle_spin_box->setValue (band_settle_ms_ / 1000);
 ```
 
-In the enable/disable block next to lines 2308-2309 (`ui_->w7pp_flex_dax_channel_label->setEnabled (native);`):
+Still inside `read_settings ()`, in the enable/disable block at lines 2308-2309 (`ui_->w7pp_flex_dax_channel_label->setEnabled (native);`):
 
 ```cpp
   ui_->band_settle_label->setEnabled (native);
   ui_->band_settle_spin_box->setEnabled (native);
 ```
 
-In `validate_rig_invariants()` — the function containing line 2689's `bool const is_flex_native_rig = (rig == "Flex Native VITA-49");` — add after the `w7pp_flex_dax_channel_combo_box->setEnabled (...)` call at line 2691. The settle hold does not depend on the RX method, only on the rig, so it uses the plain predicate rather than the compound one:
+In `Configuration::impl::set_rig_invariants ()` (begins `Configuration.cpp:2531`) — the function containing line 2689's `bool const is_flex_native_rig = (rig == "Flex Native VITA-49");` — add after the `w7pp_flex_dax_channel_combo_box->setEnabled (...)` call at line 2691. The settle hold does not depend on the RX method, only on the rig, so it uses the plain predicate rather than the compound one:
 
 ```cpp
   ui_->band_settle_spin_box->setEnabled (is_flex_native_rig);
   ui_->band_settle_label->setEnabled (is_flex_native_rig);
 ```
 
-In `accept()`, next to lines 2969-2970 (`w7pp_flex_dax_channel_ = ui_->w7pp_flex_dax_channel_combo_box->currentIndex () + 1;`):
+In `Configuration::impl::accept ()` (begins `Configuration.cpp:2860`), next to lines 2969-2970 (`w7pp_flex_dax_channel_ = ui_->w7pp_flex_dax_channel_combo_box->currentIndex () + 1;`):
 
 ```cpp
   band_settle_ms_ = ui_->band_settle_spin_box->value () * 1000;
