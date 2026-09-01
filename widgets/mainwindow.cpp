@@ -1834,7 +1834,10 @@ void MainWindow::writeSettings()
   m_settings->setValue ("CQTxfreq", ui->sbCQTxFreq->value ());
   m_settings->setValue("pwrBandTxMemory",m_pwrBandTxMemory);
   m_settings->setValue("pwrBandTuneMemory",m_pwrBandTuneMemory);
-  m_flexBandLevels.save (*m_settings);
+  // Flex Native only: writing this unconditionally put an empty
+  // W7PPFlexBandLevels key into every other rig's settings, which the
+  // design promises not to do.
+  if (m_config.is_flex_native_rig ()) m_flexBandLevels.save (*m_settings);
   m_settings->setValue ("FT8AP", ui->actionEnable_AP_FT8->isChecked ());
   m_settings->setValue ("JT65AP", ui->actionEnable_AP_JT65->isChecked ());
   m_settings->setValue ("AutoClearAvg", ui->actionAuto_Clear_Avg->isChecked ());
@@ -17846,7 +17849,12 @@ void MainWindow::switchBand(int row) {
         // every transmission, the auto-tune carrier included, until it
         // has had it. Flex Native VITA-49 only.
         bool settling = false;
-        if (m_config.is_flex_native_rig() && m_config.band_settle_ms() > 0) {
+        if (m_config.is_flex_native_rig()) {
+            // arm() already treats a non-positive time as "disabled",
+            // and it is the only thing that clears a standing deadline:
+            // skipping the call when the setting is zero would leave an
+            // in-progress hold running after the operator turned the
+            // feature off mid-hold.
             m_bandSettleGate.arm (m_config.band_settle_ms(),
                                   QDateTime::currentMSecsSinceEpoch());
             settling = m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch());

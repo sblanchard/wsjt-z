@@ -19,6 +19,9 @@ QDebug operator << (QDebug d, Transceiver::TransceiverState const& s)
     << "; SPLIT: " << (Transceiver::TransceiverState::Split::on == s.split_ ? "on" : Transceiver::TransceiverState::Split::off == s.split_ ? "off" : "unknown")
     << "; PTT: " << (s.ptt_ ? "on" : "off")
     << "; RFPWR: " << s.tx_rf_power_level_
+    << "; SLICEAF: " << s.slice_af_gain_
+    << "; DAXRX: " << s.dax_rx_gain_
+    << "; DAXTX: " << s.dax_tx_gain_
     << ')';
   return d.space ();
 }
@@ -38,6 +41,9 @@ std::ostream& operator << (std::ostream& os, Transceiver::TransceiverState const
     << "; SPLIT: " << (Transceiver::TransceiverState::Split::on == s.split_ ? "on" : Transceiver::TransceiverState::Split::off == s.split_ ? "off" : "unknown")
     << "; PTT: " << (s.ptt_ ? "on" : "off")
     << "; RFPWR: " << s.tx_rf_power_level_
+    << "; SLICEAF: " << s.slice_af_gain_
+    << "; DAXRX: " << s.dax_rx_gain_
+    << "; DAXTX: " << s.dax_tx_gain_
     << ')';
 }
 
