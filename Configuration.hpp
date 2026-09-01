@@ -93,6 +93,15 @@ public:
   bool flex_native_rx () const;
   int flex_dax_channel () const;
 
+  // True when the configured rig is the Native FLEX VITA-49 backend,
+  // regardless of any RX-method preference. Distinct from
+  // flex_native_rx(), which also requires the stored RX preference.
+  bool is_flex_native_rig () const;
+
+  // Milliseconds to inhibit transmit after an automatic band change,
+  // letting the antenna retune. Zero disables the hold.
+  int band_settle_ms () const;
+
   // These query methods should be used after a call to exec() to
   // determine if either the audio input or audio output stream
   // parameters have changed. The respective streams should be

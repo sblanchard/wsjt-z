@@ -13364,7 +13364,7 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
 {
   // W7PP :
   // For Native FLEX this control is RF watts, not audio dB.
-  if (m_config.rig_name() == "Flex Native VITA-49")
+  if (m_config.is_flex_native_rig())
     {
       bool max_ok = false;
       bool allowed_ok = false;

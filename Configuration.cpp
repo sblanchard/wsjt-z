@@ -686,6 +686,7 @@ private:
   bool tci_audio_;
   bool w7pp_flex_native_rx_ {false};
   int w7pp_flex_dax_channel_ {1};
+  int band_settle_ms_ {30000};
   qint32 volume_;
 
   Type2MsgGen type_2_msg_gen_;
@@ -923,6 +924,14 @@ bool Configuration::flex_native_rx () const
       && m_->rig_params_.rig_name == "Flex Native VITA-49";
 }
 int Configuration::flex_dax_channel () const {return m_->w7pp_flex_dax_channel_;}
+
+bool Configuration::is_flex_native_rig () const
+{
+  return m_->rig_params_.rig_name == "Flex Native VITA-49";
+}
+
+int Configuration::band_settle_ms () const {return m_->band_settle_ms_;}
+
 bool Configuration::restart_audio_input () const {return m_->restart_sound_input_device_;}
 bool Configuration::restart_audio_output () const {return m_->restart_sound_output_device_;}
 bool Configuration::restart_tci () const {return m_->restart_tci_device_;}
@@ -1847,6 +1856,7 @@ void Configuration::impl::initialize_models ()
   ui_->tci_audio_check_box->setChecked (tci_audio_);
   ui_->w7pp_flex_rx_method_combo_box->setCurrentIndex (w7pp_flex_native_rx_ ? 1 : 0);
   ui_->w7pp_flex_dax_channel_combo_box->setCurrentIndex (w7pp_flex_dax_channel_ - 1);
+  ui_->band_settle_spin_box->setValue (band_settle_ms_ / 1000);
   // ui_->rig_combo_box has not been set from rig_params_.rig_name yet
   // at this point in read_settings() (that happens further below), so
   // pass it explicitly rather than reading the not-yet-updated combo.
@@ -1994,6 +2004,9 @@ void Configuration::impl::read_settings ()
   w7pp_flex_dax_channel_ = settings_->value ("W7PPFlexDaxChannel", 1).toInt ();
   if (w7pp_flex_dax_channel_ < 1 || w7pp_flex_dax_channel_ > 8)
     w7pp_flex_dax_channel_ = 1;
+  band_settle_ms_ = settings_->value ("BandSettleMs", 30000).toInt ();
+  if (band_settle_ms_ < 0 || band_settle_ms_ > 300000)
+    band_settle_ms_ = 30000;
 
   // W7PP : restore the persisted Native FLEX radio selection.
   {
@@ -2300,6 +2313,11 @@ void Configuration::impl::update_w7pp_flex_rx_controls (QString const& rig_name)
       && rig_name == "Flex Native VITA-49"
       && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1;
 
+  // The antenna settle hold applies to the Native FLEX rig itself, not
+  // to the chosen RX method, so it is gated on the rig name alone
+  // rather than on the compound `native` condition above.
+  bool const is_flex_native_rig = rig_name == "Flex Native VITA-49";
+
   ui_->sound_input_label->setText (
       native ? tr ("Windows Input (not used):") : tr ("&Input:"));
 
@@ -2307,6 +2325,8 @@ void Configuration::impl::update_w7pp_flex_rx_controls (QString const& rig_name)
   ui_->sound_input_channel_combo_box->setEnabled (!native);
   ui_->w7pp_flex_dax_channel_label->setEnabled (native);
   ui_->w7pp_flex_dax_channel_combo_box->setEnabled (native);
+  ui_->band_settle_label->setEnabled (is_flex_native_rig);
+  ui_->band_settle_spin_box->setEnabled (is_flex_native_rig);
 
   // W7PP : the radio picker applies whenever the Native FLEX rig is
   // selected, independent of the chosen RX method.
@@ -2348,6 +2368,7 @@ void Configuration::impl::write_settings ()
   SettingsGroup g {settings_, "Configuration"};
   settings_->setValue ("W7PPFlexNativeRx", w7pp_flex_native_rx_);
   settings_->setValue ("W7PPFlexDaxChannel", w7pp_flex_dax_channel_);
+  settings_->setValue ("BandSettleMs", band_settle_ms_);
 
   // W7PP : persist the Native FLEX radio selection.
   {
@@ -2691,6 +2712,8 @@ void Configuration::impl::set_rig_invariants ()
   ui_->w7pp_flex_dax_channel_combo_box->setEnabled (
       is_flex_native_rig
       && ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1);
+  ui_->band_settle_spin_box->setEnabled (is_flex_native_rig);
+  ui_->band_settle_label->setEnabled (is_flex_native_rig);
 
   // DEVIATION from W7PP: refresh the sound-input combo box/label and
   // DAX-channel controls whenever the rig invariants are recomputed
@@ -2968,6 +2991,7 @@ void Configuration::impl::accept ()
       (ui_->w7pp_flex_rx_method_combo_box->currentIndex () == 1);
   w7pp_flex_dax_channel_ =
       ui_->w7pp_flex_dax_channel_combo_box->currentIndex () + 1;
+  band_settle_ms_ = ui_->band_settle_spin_box->value () * 1000;
 
   my_callsign_ = ui_->callsign_line_edit->text ();
   my_grid_ = ui_->grid_line_edit->text ();
