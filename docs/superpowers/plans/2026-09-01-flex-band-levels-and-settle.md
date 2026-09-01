@@ -661,6 +661,7 @@ The per-band level store, including the echo-suppression guard and migration off
   - `struct FlexBandLevels::LevelSet {int values[FieldCount];}` — `-1` means unset
   - `void capture (QString const& band, Field, int value, qint64 now_ms)`
   - `LevelSet apply (QString const& band, qint64 now_ms)` — non-const; sets the in-flight guards
+  - `LevelSet peek (QString const& band) const` — reads without arming guards
   - `void load (QSettings&)`
   - `void save (QSettings&) const`
   - `static QString const& settings_key ()` returning `"W7PPFlexBandLevels"`
@@ -687,19 +688,30 @@ private slots:
   void unvisited_band_has_every_field_unset ()
   {
     FlexBandLevels levels;
-    FlexBandLevels::LevelSet const set = levels.apply ("20m", 1000);
+    FlexBandLevels::LevelSet const set = levels.peek ("20m");
     for (int f = 0; f < FlexBandLevels::FieldCount; ++f)
       {
         QCOMPARE (set.values[f], -1);
       }
   }
 
-  void capture_then_apply_returns_the_value ()
+  void capture_then_peek_returns_the_value ()
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    FlexBandLevels::LevelSet const set = levels.apply ("20m", 2000);
+    FlexBandLevels::LevelSet const set = levels.peek ("20m");
     QCOMPARE (set.values[FlexBandLevels::RfWatts], 35);
+  }
+
+  // peek() is the read-only observer: unlike apply(), it must not arm
+  // the echo guards, or every assertion would change what it measures.
+  void peek_does_not_arm_guards ()
+  {
+    FlexBandLevels levels;
+    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+    levels.peek ("20m");
+    levels.capture ("20m", FlexBandLevels::RfWatts, 70, 1100);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
   }
 
   void bands_are_independent ()
@@ -707,8 +719,8 @@ private slots:
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
     levels.capture ("40m", FlexBandLevels::RfWatts, 80, 1000);
-    QCOMPARE (levels.apply ("20m", 2000).values[FlexBandLevels::RfWatts], 35);
-    QCOMPARE (levels.apply ("40m", 2000).values[FlexBandLevels::RfWatts], 80);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 80);
   }
 
   void all_four_fields_round_trip_independently ()
@@ -719,7 +731,7 @@ private slots:
     levels.capture ("20m", FlexBandLevels::DaxRxGain, 55, 1000);
     levels.capture ("20m", FlexBandLevels::DaxTxGain, 61, 1000);
 
-    FlexBandLevels::LevelSet const set = levels.apply ("20m", 2000);
+    FlexBandLevels::LevelSet const set = levels.peek ("20m");
     QCOMPARE (set.values[FlexBandLevels::RfWatts], 35);
     QCOMPARE (set.values[FlexBandLevels::SliceAfGain], 42);
     QCOMPARE (set.values[FlexBandLevels::DaxRxGain], 55);
@@ -736,11 +748,11 @@ private slots:
 
     // The radio echoes the value straight back: dropped.
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
-    QCOMPARE (levels.apply ("20m", 2200).values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
 
     // The echo cleared the guard, so a genuine later change lands.
     levels.capture ("20m", FlexBandLevels::RfWatts, 70, 2300);
-    QCOMPARE (levels.apply ("20m", 2400).values[FlexBandLevels::RfWatts], 70);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
   }
 
   void guard_expires_when_no_echo_arrives ()
@@ -751,7 +763,7 @@ private slots:
 
     // Nothing echoed. After the 2s timeout, captures land again.
     levels.capture ("20m", FlexBandLevels::RfWatts, 70, 4100);
-    QCOMPARE (levels.apply ("20m", 4200).values[FlexBandLevels::RfWatts], 70);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
   }
 
   void guard_does_not_block_a_different_field ()
@@ -761,7 +773,7 @@ private slots:
     levels.apply ("20m", 2000);
 
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 42, 2100);
-    QCOMPARE (levels.apply ("20m", 2200).values[FlexBandLevels::SliceAfGain], 42);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 42);
   }
 
   void unset_fields_are_not_guarded_by_apply ()
@@ -770,14 +782,14 @@ private slots:
     // Nothing stored, so apply() pushes nothing and guards nothing.
     levels.apply ("20m", 2000);
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
-    QCOMPARE (levels.apply ("20m", 2200).values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
   }
 
   void negative_captures_are_ignored ()
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, -1, 1000);
-    QCOMPARE (levels.apply ("20m", 2000).values[FlexBandLevels::RfWatts], -1);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], -1);
   }
 
   void save_and_load_preserve_all_bands_and_fields ()
@@ -801,13 +813,13 @@ private slots:
     QSettings settings {path, QSettings::IniFormat};
     restored.load (settings);
 
-    FlexBandLevels::LevelSet const twenty = restored.apply ("20m", 2000);
+    FlexBandLevels::LevelSet const twenty = restored.peek ("20m");
     QCOMPARE (twenty.values[FlexBandLevels::RfWatts], 35);
     QCOMPARE (twenty.values[FlexBandLevels::DaxTxGain], 61);
     // Never captured: still unset after a round trip.
     QCOMPARE (twenty.values[FlexBandLevels::SliceAfGain], -1);
 
-    QCOMPARE (restored.apply ("40m", 2000).values[FlexBandLevels::SliceAfGain], 42);
+    QCOMPARE (restored.peek ("40m").values[FlexBandLevels::SliceAfGain], 42);
   }
 
   void load_migrates_the_legacy_global_watts_key ()
@@ -829,8 +841,8 @@ private slots:
     levels.load (settings);
     levels.migrate_legacy_watts (settings, bands);
 
-    QCOMPARE (levels.apply ("20m", 2000).values[FlexBandLevels::RfWatts], 45);
-    QCOMPARE (levels.apply ("40m", 2000).values[FlexBandLevels::RfWatts], 45);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 45);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 45);
   }
 
   void migration_never_overwrites_a_stored_band ()
@@ -849,8 +861,8 @@ private slots:
     bands << "20m" << "40m";
     levels.migrate_legacy_watts (settings, bands);
 
-    QCOMPARE (levels.apply ("20m", 2000).values[FlexBandLevels::RfWatts], 90);
-    QCOMPARE (levels.apply ("40m", 2000).values[FlexBandLevels::RfWatts], 45);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 90);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 45);
   }
 };
 
@@ -945,6 +957,10 @@ public:
   // The levels to push on arrival at a band. Arms the guard for every
   // field that carries a value. Not const: the guards are state.
   LevelSet apply (QString const& band, qint64 now_ms);
+
+  // Read a band's levels without arming anything. Use this to observe;
+  // use apply() only when the values are actually going to the radio.
+  LevelSet peek (QString const& band) const;
 
   void load (QSettings&);
   void save (QSettings&) const;
@@ -1051,13 +1067,7 @@ FlexBandLevels::LevelSet FlexBandLevels::apply (QString const& band,
       return set;
     }
 
-  QHash<QString, LevelSet>::const_iterator b = bands_.constFind (band);
-  if (b == bands_.constEnd ())
-    {
-      return set;
-    }
-
-  set = *b;
+  set = peek (band);
 
   Guard& guard = guards_[band];
   for (int f = 0; f < FieldCount; ++f)
@@ -1066,6 +1076,19 @@ FlexBandLevels::LevelSet FlexBandLevels::apply (QString const& band,
         {
           guard.until_ms[f] = now_ms + guard_ms;
         }
+    }
+
+  return set;
+}
+
+FlexBandLevels::LevelSet FlexBandLevels::peek (QString const& band) const
+{
+  LevelSet set;
+
+  QHash<QString, LevelSet>::const_iterator b = bands_.constFind (band);
+  if (b != bands_.constEnd ())
+    {
+      set = *b;
     }
 
   return set;
@@ -1175,7 +1198,7 @@ In `CMakeLists.txt`, in `wsjt_qt_CXXSRCS` next to the `Transceiver/BandSettleGat
 - [ ] **Step 7: Run the test to verify it passes**
 
 Run: `cmake --build build -j4 --target test_flex_band_levels && ctest --test-dir build -R test_flex_band_levels --output-on-failure`
-Expected: PASS, 12 test functions.
+Expected: PASS, 13 test functions.
 
 - [ ] **Step 8: Commit**
 
@@ -1626,7 +1649,9 @@ void NativeFlexTransceiver::capture_gain_status(
 
 - [ ] **Step 3: Call it from every read loop**
 
-`capture_transmit_status` is called from four separate read loops. Add `capture_gain_status(line);` immediately after each `capture_transmit_status(line);` call, at these lines: **600**, **676**, **805**, and **1214**.
+`capture_transmit_status` is called from four separate read loops. Add `capture_gain_status(line);` immediately after **every** `capture_transmit_status(line);` call.
+
+Find them with `grep -n "capture_transmit_status(line);" Transceiver/NativeFlexTransceiver.cpp` and expect **exactly four** call sites. Do not use line numbers for this: Task 5 inserts roughly 45 lines into this same file above all four sites, so any number quoted here is stale by the time you run. The count is the check — four calls before, four `capture_gain_status(line);` after.
 
 While at line 675, note the pre-existing duplicated `capture_dax_tx_stream(line);` on consecutive lines 674-675. Leave it alone — it is harmless and out of scope for this feature.
 
