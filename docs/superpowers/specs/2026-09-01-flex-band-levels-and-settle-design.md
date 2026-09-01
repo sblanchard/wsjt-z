@@ -21,6 +21,17 @@ key. Slice AF gain, DAX RX gain, and DAX TX gain are not tracked at all —
 `NativeFlexTransceiver` implements only `do_tx_rf_power_level`. Every hop
 therefore lands on a band with the previous band's levels.
 
+**Correction, found during implementation.** An earlier draft of this section
+claimed Flex mode has no TX audio control at all. That is wrong: WSJT-Z already
+has a dedicated `w7ppFlexTxAudioAttenuation` slider, shown only for the Native
+FLEX rig, persisted globally as `W7PPNativeFlexTxAudioAttenuation`. It is a
+different quantity from this design's `dax_tx_gain` — that slider is WSJT-Z's
+own audio output attenuation, while `dax_tx_gain` is the radio-side DAX TX
+stream gain — so the four fields below stand unchanged. But it is a fifth
+Flex level that is also global rather than per band, and the operator's request
+("remember all flex power and volume levels per band") arguably covers it.
+**Out of scope here, and left for the operator to decide.**
+
 ## Scope
 
 Both features are active **only** when the configured rig is
@@ -68,7 +79,7 @@ roughly 100 ms and drives the status bar.
 
 ```
 void  arm (int ms, qint64 now);
-void  override ();          // operator forced TX; hold ends now
+void  override_hold ();     // operator forced TX; hold ends now
 void  disarm ();
 bool  active (qint64 now) const;
 int   remaining_seconds (qint64 now) const;
@@ -137,10 +148,22 @@ out of `switchBand()`. `MainWindow` records `m_deferredAutoTune = true`; when
 `tuneButtonTimer.start(4000)`. Same four-second carrier, thirty seconds later.
 
 **Operator override.** `on_tuneButton_clicked` and the Enable Tx handler call
-`m_bandSettleGate.override()`, which ends the hold immediately. A tune that
-WSJT-Z scheduled itself must not count as an override: the handlers test
-`m_deferredAutoTune` and skip `override()` when it is set, clearing the flag
-afterwards.
+`m_bandSettleGate.override_hold()`, which ends the hold immediately. A tune that
+WSJT-Z scheduled itself must not count as an override.
+
+**Corrected during implementation.** An earlier draft used `m_deferredAutoTune`
+as that discriminator. It does not work: `guiUpdate()` clears the flag before
+invoking the handler, so the deferred tune arrives with the flag already false,
+while an operator clicking Tune *during* a hold arrives with it still true —
+exactly inverted. The operator's click would have cleared the flag and never
+released the hold, failing this design's own acceptance criterion. The working
+discriminator is the gate itself: override only when
+`m_bandSettleGate.active(now)` is true, which is false on the deferred path by
+construction (it is the firing precondition) and true on the operator path.
+
+The Enable Tx hook sits **after** `on_autoButton_clicked`'s Native FLEX
+safety-trip guard, which can refuse the request and return early. A refused
+Enable Tx must not clear the hold.
 
 **Feedback.** The countdown appends `SETTLE 23s` to the existing
 `mode_switch_status_label`, next to the `BH n->band` text produced around

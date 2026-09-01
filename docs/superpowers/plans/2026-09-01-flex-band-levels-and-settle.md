@@ -1616,16 +1616,30 @@ void NativeFlexTransceiver::capture_gain_status(
     }
   else if (payload.startsWith("dax "))
     {
-      if (payload.contains("tx_gain="))
+      // Only this client's DAX channel speaks for this band. Without
+      // an ownership check another client's gain would be captured,
+      // stored against this band, and pushed to the radio on the next
+      // hop -- the same mistake the slice branch above avoids.
+      //
+      // PROVISIONAL: the token form below is a guess at the payload
+      // shape and is unverified against hardware. It deliberately
+      // fails CLOSED -- a wrong guess leaves the properties unset
+      // rather than publishing a value we do not own. If
+      // W7PPNativeFlexDaxRxGain / W7PPNativeFlexDaxTxGain never
+      // populate against a live radio, THIS CHECK IS THE FIRST
+      // SUSPECT: capture a raw "dax " status line and correct it.
+      if (!payload.startsWith (
+              QStringLiteral ("dax %1 ").arg (dax_channel_).toLatin1 ()))
         {
-          marker = "tx_gain=";
-          property = "W7PPNativeFlexDaxTxGain";
+          return;
         }
-      else
-        {
-          marker = "rx_gain=";
-          property = "W7PPNativeFlexDaxRxGain";
-        }
+
+      // Extract both gains independently. A single status payload may
+      // carry rx_gain and tx_gain together; an if/else here would pick
+      // one and permanently starve the other.
+      publish_gain (payload, "rx_gain=", "W7PPNativeFlexDaxRxGain");
+      publish_gain (payload, "tx_gain=", "W7PPNativeFlexDaxTxGain");
+      return;
     }
   else
     {
@@ -1797,7 +1811,9 @@ Add a companion member to `widgets/mainwindow.h` next to `m_deferredAutoTune`:
   int m_lastLevelPollSec {-1};
 ```
 
-`guiUpdate()` runs about every 100 ms, which is more often than these levels can meaningfully change. Drive the poll once a second from the `nsec` already computed at `widgets/mainwindow.cpp:8426`, immediately after the `update_mode_switch_status_label ();` call at line 8432:
+`guiUpdate()` runs about every 100 ms, which is more often than these levels can meaningfully change. Drive the poll once a second from the `nsec` already computed near the top of `MainWindow::guiUpdate ()`, immediately after its `update_mode_switch_status_label ();` call.
+
+Note `int nsec=ms/1000;` appears **twice** in this file — once in `guiUpdate ()` and once in `WSPR_scheduling ()`. You want the one inside `guiUpdate ()`; confirm the enclosing function before inserting:
 
 ```cpp
   if (nsec != m_lastLevelPollSec) {
@@ -1855,6 +1871,15 @@ In `MainWindow::switchBand(int row)`, immediately after the settle-gate block ad
 ```
 
 - [ ] **Step 5: Move RF watts off the global key**
+
+`W7PPNativeFlexRfWatts` is written or read at **three** sites, not two. Find them all with `grep -n "W7PPNativeFlexRfWatts" widgets/mainwindow.cpp` and handle each:
+
+1. `MainWindow::writeSettings ()` — inside the `rig_name() == "Flex Native VITA-49"` branch, guarded by `outAttenuation`'s `w7ppNativeFlexPowerReady` property, it writes the current slider value to the global key on every settings write. **Delete this write.** `FlexBandLevels::save()` (added in Step 2) now owns the watts, and leaving this writer means the global key keeps being overwritten with whatever band happened to be current at shutdown — which is exactly the behaviour this task removes. Leave the surrounding `W7PPNativeFlexTxAudioAttenuation` write alone; that is a different control.
+2. The startup restore lambda — replaced below.
+3. `on_outAttenuation_valueChanged` — replaced below.
+
+The key is then never written and read only once, by `migrate_legacy_watts()`, which is what "legacy" means.
+
 
 In `on_outAttenuation_valueChanged` (`widgets/mainwindow.cpp:13363`), replace the global write near line 13421:
 
