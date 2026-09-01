@@ -1250,6 +1250,10 @@ endif ()
 if (WSJT_GENERATE_DOCS)
   add_subdirectory (doc)
 endif (WSJT_GENERATE_DOCS)
+# Register the unit tests with CTest. Without enable_testing() every
+# add_test() in tests/CMakeLists.txt is inert and ctest reports "No tests
+# were found" while still exiting 0 -- a green run that verified nothing.
+enable_testing ()
 if (EXISTS ${CMAKE_SOURCE_DIR}/tests AND IS_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
   add_subdirectory (tests)
 endif ()
