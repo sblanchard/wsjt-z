@@ -630,9 +630,6 @@ void NativeFlexTransceiver::capture_gain_status(
       return;
     }
 
-  QByteArray property;
-  QByteArray marker;
-
   if (payload.startsWith("slice "))
     {
       // Only our own slice speaks for the current band.
@@ -645,49 +642,101 @@ void NativeFlexTransceiver::capture_gain_status(
           return;
         }
 
-      marker = "audio_gain=";
-      property = "W7PPNativeFlexSliceAfGain";
-    }
-  else if (payload.startsWith("dax "))
-    {
-      if (payload.contains("tx_gain="))
+      QByteArray const marker {"audio_gain="};
+
+      for (QByteArray const& field : payload.split(' '))
         {
-          marker = "tx_gain=";
-          property = "W7PPNativeFlexDaxTxGain";
+          if (!field.startsWith(marker))
+            {
+              continue;
+            }
+
+          bool ok = false;
+
+          int const value =
+              QString::fromLatin1(
+                  field.mid(marker.size()))
+                  .toInt(&ok);
+
+          if (!ok || value < 0 || value > 100)
+            {
+              continue;
+            }
+
+          app->setProperty(
+              "W7PPNativeFlexSliceAfGain",
+              QVariant::fromValue(value));
+          return;
         }
-      else
-        {
-          marker = "rx_gain=";
-          property = "W7PPNativeFlexDaxRxGain";
-        }
-    }
-  else
-    {
+
       return;
     }
 
-  for (QByteArray const& field : payload.split(' '))
+  if (payload.startsWith("dax "))
     {
-      if (!field.startsWith(marker))
+      // Fail closed: only publish DAX gains when the payload names
+      // this client's own DAX channel. Neither of us has confirmed
+      // the real DAX status payload shape, so this guesses that it
+      // repeats the channel number the same way slice status repeats
+      // the slice id, e.g. "dax 1 ...". THIS TOKEN IS PROVISIONAL and
+      // is the first thing to suspect if W7PPNativeFlexDaxRxGain /
+      // W7PPNativeFlexDaxTxGain never populate against a live radio
+      // -- the payload may not carry a channel number in this
+      // position at all, or may use a different form (hex, a
+      // "channel=" field, a stream handle, etc). If this guess is
+      // wrong the properties stay unset rather than being filled from
+      // another client's DAX channel.
+      if (!payload.startsWith(
+              QStringLiteral("dax %1 ")
+                  .arg(dax_channel_)
+                  .toLatin1()))
         {
-          continue;
+          return;
         }
 
-      bool ok = false;
+      QByteArray const rx_marker {"rx_gain="};
+      QByteArray const tx_marker {"tx_gain="};
 
-      int const value =
-          QString::fromLatin1(
-              field.mid(marker.size()))
-              .toInt(&ok);
-
-      if (!ok || value < 0 || value > 100)
+      // A single status line may carry both rx_gain= and tx_gain=,
+      // so both are extracted independently here rather than
+      // stopping at the first match.
+      for (QByteArray const& field : payload.split(' '))
         {
-          continue;
+          QByteArray marker;
+          QByteArray property;
+
+          if (field.startsWith(rx_marker))
+            {
+              marker = rx_marker;
+              property = "W7PPNativeFlexDaxRxGain";
+            }
+          else if (field.startsWith(tx_marker))
+            {
+              marker = tx_marker;
+              property = "W7PPNativeFlexDaxTxGain";
+            }
+          else
+            {
+              continue;
+            }
+
+          bool ok = false;
+
+          int const value =
+              QString::fromLatin1(
+                  field.mid(marker.size()))
+                  .toInt(&ok);
+
+          if (!ok || value < 0 || value > 100)
+            {
+              continue;
+            }
+
+          app->setProperty(
+              property.constData(),
+              QVariant::fromValue(value));
         }
 
-      app->setProperty(
-          property.constData(),
-          QVariant::fromValue(value));
       return;
     }
 }
