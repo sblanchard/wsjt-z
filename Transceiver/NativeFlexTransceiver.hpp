@@ -61,6 +61,7 @@ private:
   void capture_owned_slice(QByteArray const& line);
   void capture_dax_tx_stream(QByteArray const& line);
   void capture_transmit_status(QByteArray const& line);
+  void capture_gain_status(QByteArray const& line);
   void wait_for_dax_tx_stream();
   void wait_for_owned_slice();
   QByteArray send_command(QString const& command);

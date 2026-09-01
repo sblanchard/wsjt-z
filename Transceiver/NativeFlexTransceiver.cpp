@@ -592,6 +592,106 @@ void NativeFlexTransceiver::capture_transmit_status(
     }
 }
 
+void NativeFlexTransceiver::capture_gain_status(
+    QByteArray const& line)
+{
+  //
+  // Publish the receive and transmit audio gains the radio reports,
+  // so a level the operator changes in SmartSDR is seen here exactly
+  // like one changed in WSJT-Z.
+  //
+  // Read-only with respect to the radio.
+  //
+  // The field names below (audio_gain= on slice status, rx_gain=/
+  // tx_gain= on dax status) are unverified against hardware; no
+  // radio was attached when this was written. If a property below
+  // never populates against a live radio, capture the raw status
+  // line and check whether the radio actually uses these names.
+  //
+  if (!line.startsWith('S'))
+    {
+      return;
+    }
+
+  int const pipe = line.indexOf('|');
+
+  if (pipe <= 1)
+    {
+      return;
+    }
+
+  QByteArray const payload = line.mid(pipe + 1).trimmed();
+
+  QCoreApplication * const app =
+      QCoreApplication::instance();
+
+  if (!app)
+    {
+      return;
+    }
+
+  QByteArray property;
+  QByteArray marker;
+
+  if (payload.startsWith("slice "))
+    {
+      // Only our own slice speaks for the current band.
+      if (slice_id_ < 0
+          || !payload.startsWith(
+                 QStringLiteral("slice %1 ")
+                     .arg(slice_id_)
+                     .toLatin1()))
+        {
+          return;
+        }
+
+      marker = "audio_gain=";
+      property = "W7PPNativeFlexSliceAfGain";
+    }
+  else if (payload.startsWith("dax "))
+    {
+      if (payload.contains("tx_gain="))
+        {
+          marker = "tx_gain=";
+          property = "W7PPNativeFlexDaxTxGain";
+        }
+      else
+        {
+          marker = "rx_gain=";
+          property = "W7PPNativeFlexDaxRxGain";
+        }
+    }
+  else
+    {
+      return;
+    }
+
+  for (QByteArray const& field : payload.split(' '))
+    {
+      if (!field.startsWith(marker))
+        {
+          continue;
+        }
+
+      bool ok = false;
+
+      int const value =
+          QString::fromLatin1(
+              field.mid(marker.size()))
+              .toInt(&ok);
+
+      if (!ok || value < 0 || value > 100)
+        {
+          continue;
+        }
+
+      app->setProperty(
+          property.constData(),
+          QVariant::fromValue(value));
+      return;
+    }
+}
+
 /*
  * DEVIATION from W7PP: wait for the slice we just asked FLEX to create.
  *
@@ -667,6 +767,7 @@ void NativeFlexTransceiver::wait_for_owned_slice()
           capture_owned_slice(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
+          capture_gain_status(line);
         }
     }
 
@@ -743,6 +844,7 @@ void NativeFlexTransceiver::wait_for_dax_tx_stream()
           capture_dax_tx_stream(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
+          capture_gain_status(line);
         }
     }
 
@@ -872,6 +974,7 @@ QByteArray NativeFlexTransceiver::send_command(
           capture_owned_slice(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
+          capture_gain_status(line);
 
           if (!line.startsWith(response_prefix))
             {
@@ -1281,6 +1384,7 @@ int NativeFlexTransceiver::do_start()
           capture_owned_slice(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
+          capture_gain_status(line);
 
           if (!line.startsWith("R1|"))
             {
