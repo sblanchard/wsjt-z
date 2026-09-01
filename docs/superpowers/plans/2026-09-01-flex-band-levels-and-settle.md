@@ -589,10 +589,14 @@ In `MainWindow::on_tuneButton_clicked (bool checked)`, at the very top of the fu
   }
 ```
 
-Enable Tx is the `autoButton`. In `MainWindow::on_autoButton_clicked (bool checked)` (`widgets/mainwindow.cpp:4269`), at the top of the function body:
+Enable Tx is the `autoButton`. `MainWindow::on_autoButton_clicked (bool checked)` (`widgets/mainwindow.cpp:4269`) opens with a Native FLEX safety-trip guard that can `ui->autoButton->setChecked(false)` and **return early**, refusing the request. Do **not** insert at the very top of the function: a refused Enable Tx is not the operator commanding transmit, and clearing the hold there would drop the antenna protection on a click that never enabled TX.
+
+Insert after that guard, on the line that commits to the request — immediately before the existing `if (checked) tx_watchdog(false);`:
 
 ```cpp
-  // Clicking Enable Tx is the operator saying "transmit anyway".
+  // Clicking Enable Tx is the operator saying "transmit anyway", so it
+  // ends the antenna settle hold. Placed after the safety-trip guard
+  // above: a refused request must not clear the hold.
   if (checked) {
       m_bandSettleGate.override_hold ();
   }
