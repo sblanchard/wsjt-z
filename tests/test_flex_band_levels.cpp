@@ -122,6 +122,13 @@ private slots:
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 75, 3000);
     QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 40);
 
+    // A second stale sample: the guard is still armed, so this must
+    // still be dropped. Under the old consume-on-first-touch rule the
+    // guard was already gone by now and this sample overwrote the
+    // stored value -- which is exactly the regression this pins.
+    levels.capture ("20m", FlexBandLevels::SliceAfGain, 75, 3400);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 40);
+
     // The genuine echo arrives while the guard is still armed: still
     // recognised, still dropped, and now the guard is consumed.
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 40, 3500);

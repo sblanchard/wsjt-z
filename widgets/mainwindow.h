@@ -160,6 +160,10 @@ public slots:
   void fastPick(int x0, int x1, int y);
 
 private:
+  // What the radio last reported for one of the Native FLEX level
+  // properties, or -1 when it has reported nothing usable yet.
+  // A plain const helper, not a slot.
+  int flexReportedLevel (char const * property) const;
   // W7PP native Flex 12 kHz decoder-buffer ingress.
   void flexDataSink (FlexVitaReceiver::DecoderBlock const& samples);
   void syncFlexVitaReceiver ();
@@ -299,9 +303,6 @@ private slots:
   void on_RxFreqSpinBox_valueChanged(int n);
   void on_outAttenuation_valueChanged (int);
   void pollFlexBandLevels ();
-  // What the radio last reported for one of the Native FLEX level
-  // properties, or -1 when it has reported nothing usable yet.
-  int flexReportedLevel (char const * property) const;
   void rigOpen ();
   void handle_transceiver_update (Transceiver::TransceiverState const&);
   void handle_transceiver_failure (QString const& reason);
