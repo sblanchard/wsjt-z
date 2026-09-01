@@ -127,6 +127,23 @@ int main(int argc, char *argv[])
   auto const env = QProcessEnvironment::systemEnvironment ();
 
   ExceptionCatchingApplication a(argc, argv);
+
+  // Create the three Native FLEX level properties here, on the GUI
+  // thread, before any transceiver thread exists to write them. Qt
+  // dynamic properties are unsynchronised, and adding a *new* name is
+  // the risky case: it grows the property container, so a write from
+  // the transceiver thread could reallocate it under a concurrent read
+  // on the GUI thread. Seeding all three up front means the container
+  // never grows concurrently and only benign value races remain.
+  //
+  // -1 is the "nothing reported yet" sentinel. Every reader requires a
+  // value >= 0, so a seeded -1 is simply ignored until the radio
+  // reports something real, and no non-Flex behaviour is affected --
+  // nothing outside the Native FLEX path ever reads these names.
+  a.setProperty ("W7PPNativeFlexSliceAfGain", -1);
+  a.setProperty ("W7PPNativeFlexDaxRxGain", -1);
+  a.setProperty ("W7PPNativeFlexDaxTxGain", -1);
+
   try
     {
       // LOG_INfO ("+++++++++++++++++++++++++++ Resources ++++++++++++++++++++++++++++");

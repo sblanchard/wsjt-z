@@ -2404,6 +2404,14 @@ void MainWindow::readSettings()
                               * 100.0
                               / double(max_watts)),
                           100);
+                  // See flexReportedLevel(): prime the chain with the
+                  // radio's own value so this push -- and the retries
+                  // this lambda makes at 1.5s, 3s, 5s and 8s -- cannot
+                  // be deduped away against what was last requested.
+                  if (rf_level != display_percent)
+                    {
+                      m_config.transceiver_tx_rf_power_level(rf_level);
+                    }
                   m_config.transceiver_tx_rf_power_level(display_percent);
                   // Guard on the watts the echo will carry, not the
                   // watts pushed: the percent round trip may not be
@@ -2438,6 +2446,14 @@ void MainWindow::readSettings()
           // ever calls switchBand() to push them back.
           if (startup_levels.values[FlexBandLevels::SliceAfGain] >= 0)
             {
+              int const reported =
+                  flexReportedLevel("W7PPNativeFlexSliceAfGain");
+              if (reported >= 0
+                  && reported
+                         != startup_levels.values[FlexBandLevels::SliceAfGain])
+                {
+                  m_config.transceiver_slice_af_gain(reported);
+                }
               m_config.transceiver_slice_af_gain(
                   startup_levels.values[FlexBandLevels::SliceAfGain]);
               m_flexBandLevels.arm_guard(
@@ -2447,6 +2463,14 @@ void MainWindow::readSettings()
             }
           if (startup_levels.values[FlexBandLevels::DaxRxGain] >= 0)
             {
+              int const reported =
+                  flexReportedLevel("W7PPNativeFlexDaxRxGain");
+              if (reported >= 0
+                  && reported
+                         != startup_levels.values[FlexBandLevels::DaxRxGain])
+                {
+                  m_config.transceiver_dax_gain(reported, false);
+                }
               m_config.transceiver_dax_gain(
                   startup_levels.values[FlexBandLevels::DaxRxGain], false);
               m_flexBandLevels.arm_guard(
@@ -2456,6 +2480,14 @@ void MainWindow::readSettings()
             }
           if (startup_levels.values[FlexBandLevels::DaxTxGain] >= 0)
             {
+              int const reported =
+                  flexReportedLevel("W7PPNativeFlexDaxTxGain");
+              if (reported >= 0
+                  && reported
+                         != startup_levels.values[FlexBandLevels::DaxTxGain])
+                {
+                  m_config.transceiver_dax_gain(reported, true);
+                }
               m_config.transceiver_dax_gain(
                   startup_levels.values[FlexBandLevels::DaxTxGain], true);
               m_flexBandLevels.arm_guard(
@@ -13509,6 +13541,26 @@ void MainWindow::transmit (double snr)
   }
 }
 
+// TransceiverBase::set() suppresses a gain command whose value equals
+// the one WSJT-Z last *requested*, while these qApp properties carry
+// what the radio last *reported*. Nothing reconciles the two, so after
+// the operator moves a level in SmartSDR the push a band arrival needs
+// can be silently dropped and the band lands on the SmartSDR value.
+//
+// The cure is to prime the command chain with the radio's own reported
+// value before pushing the wanted one. That priming command costs
+// nothing at the radio -- it is already at that value -- but it leaves
+// the dedupe cache holding it, so the real push that follows is always
+// delivered. Clearing TransceiverBase::requested_ directly is not
+// reachable from here: it lives on the transceiver thread behind the
+// queued set_transceiver() signal.
+int MainWindow::flexReportedLevel (char const * property) const
+{
+  bool ok = false;
+  int const value = qApp->property (property).toInt (&ok);
+  return (ok && value >= 0) ? value : -1;
+}
+
 // Record whatever the radio currently reports for this band. Driven by
 // the FLEX status stream via qApp properties, so a level changed in
 // SmartSDR is captured exactly like one changed here.
@@ -17826,6 +17878,14 @@ void MainWindow::switchBand(int row) {
                 m_block_pwr_tooltip = true;
                 ui->outAttenuation->setValue (watts);
                 m_block_pwr_tooltip = false;
+                // See flexReportedLevel(): prime the chain with the
+                // radio's own value so the dispatch cannot dedupe the
+                // push away after a change made in SmartSDR.
+                int const reported_percent =
+                    flexReportedLevel ("W7PPNativeFlexRfPower");
+                if (reported_percent >= 0 && reported_percent != percent) {
+                    m_config.transceiver_tx_rf_power_level (reported_percent);
+                }
                 m_config.transceiver_tx_rf_power_level (percent);
                 // Arm the guard on the watts the echo will actually
                 // carry: the radio reports rfpower percent, which
@@ -17839,6 +17899,12 @@ void MainWindow::switchBand(int row) {
             }
 
             if (levels.values[FlexBandLevels::SliceAfGain] >= 0) {
+                int const reported =
+                    flexReportedLevel ("W7PPNativeFlexSliceAfGain");
+                if (reported >= 0
+                    && reported != levels.values[FlexBandLevels::SliceAfGain]) {
+                    m_config.transceiver_slice_af_gain (reported);
+                }
                 m_config.transceiver_slice_af_gain (
                     levels.values[FlexBandLevels::SliceAfGain]);
                 m_flexBandLevels.arm_guard (
@@ -17846,6 +17912,12 @@ void MainWindow::switchBand(int row) {
                     levels.values[FlexBandLevels::SliceAfGain], arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxRxGain] >= 0) {
+                int const reported =
+                    flexReportedLevel ("W7PPNativeFlexDaxRxGain");
+                if (reported >= 0
+                    && reported != levels.values[FlexBandLevels::DaxRxGain]) {
+                    m_config.transceiver_dax_gain (reported, false);
+                }
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxRxGain], false);
                 m_flexBandLevels.arm_guard (
@@ -17853,6 +17925,12 @@ void MainWindow::switchBand(int row) {
                     levels.values[FlexBandLevels::DaxRxGain], arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxTxGain] >= 0) {
+                int const reported =
+                    flexReportedLevel ("W7PPNativeFlexDaxTxGain");
+                if (reported >= 0
+                    && reported != levels.values[FlexBandLevels::DaxTxGain]) {
+                    m_config.transceiver_dax_gain (reported, true);
+                }
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxTxGain], true);
                 m_flexBandLevels.arm_guard (
