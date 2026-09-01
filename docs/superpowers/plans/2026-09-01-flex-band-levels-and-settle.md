@@ -1507,10 +1507,18 @@ void NativeFlexTransceiver::do_dax_gain(int gain, bool tx)
       return;
     }
 
+  if (slice_id_ < 0)
+    {
+      // No slice yet: the level is re-pushed on the next band arrival.
+      // Never substitute slice 0 here -- on a FLEX that is a real slice,
+      // often owned by another client, not a sentinel.
+      return;
+    }
+
   send_command(
       QStringLiteral("audio stream 0x%1 slice %2 gain %3")
           .arg(dax_channel_, 0, 16)
-          .arg(slice_id_ < 0 ? 0 : slice_id_)
+          .arg(slice_id_)
           .arg(gain));
 }
 ```
