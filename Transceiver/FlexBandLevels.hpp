@@ -50,13 +50,16 @@ public:
   // and ignored for negative values.
   void capture (QString const& band, Field, int value, qint64 now_ms);
 
-  // The levels to push on arrival at a band. Arms the guard for every
-  // field that carries a value. Not const: the guards are state.
-  LevelSet apply (QString const& band, qint64 now_ms);
-
-  // Read a band's levels without arming anything. Use this to observe;
-  // use apply() only when the values are actually going to the radio.
+  // Read a band's levels without arming anything. Use this to decide
+  // what to push; it arms nothing itself.
   LevelSet peek (QString const& band) const;
+
+  // Arm the echo guard for exactly one field, because the caller is
+  // about to push its value to the radio right now. Call this only
+  // for a field actually being pushed -- arming a field that was
+  // merely read via peek() but never sent would swallow its next
+  // genuine capture for no reason.
+  void arm_guard (QString const& band, Field, qint64 now_ms);
 
   void load (QSettings&);
   void save (QSettings&) const;

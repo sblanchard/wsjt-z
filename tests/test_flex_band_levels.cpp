@@ -64,13 +64,13 @@ private slots:
     QCOMPARE (set.values[FlexBandLevels::DaxTxGain], 61);
   }
 
-  void apply_guards_pushed_fields_against_their_own_echo ()
+  void arm_guard_guards_the_pushed_field_against_its_own_echo ()
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
 
     // Pushing to the radio arms the guard for that field.
-    levels.apply ("20m", 2000);
+    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
 
     // The radio echoes the value straight back: dropped.
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
@@ -85,7 +85,7 @@ private slots:
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.apply ("20m", 2000);
+    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
 
     // Nothing echoed. After the 2s timeout, captures land again.
     levels.capture ("20m", FlexBandLevels::RfWatts, 70, 4100);
@@ -96,17 +96,21 @@ private slots:
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.apply ("20m", 2000);
+    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
 
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 42, 2100);
     QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 42);
   }
 
-  void unset_fields_are_not_guarded_by_apply ()
+  // A field the caller never actually pushed -- and therefore never
+  // armed -- must not be guarded. Deciding what to arm is now entirely
+  // the caller's job (peek(), decide what to push, arm_guard() only
+  // for that), so this is what used to be "apply() pushed nothing and
+  // guarded nothing" when nothing was stored.
+  void field_never_armed_is_never_guarded ()
   {
     FlexBandLevels levels;
-    // Nothing stored, so apply() pushes nothing and guards nothing.
-    levels.apply ("20m", 2000);
+    // No arm_guard() call at all for this field.
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
     QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
   }

@@ -63,28 +63,15 @@ void FlexBandLevels::capture (QString const& band, Field field,
   bands_[band].values[field] = value;
 }
 
-FlexBandLevels::LevelSet FlexBandLevels::apply (QString const& band,
-                                                qint64 now_ms)
+void FlexBandLevels::arm_guard (QString const& band, Field field,
+                                qint64 now_ms)
 {
-  LevelSet set;
-
-  if (band.isEmpty ())
+  if (band.isEmpty () || field < 0 || field >= FieldCount)
     {
-      return set;
+      return;
     }
 
-  set = peek (band);
-
-  Guard& guard = guards_[band];
-  for (int f = 0; f < FieldCount; ++f)
-    {
-      if (set.values[f] >= 0)
-        {
-          guard.until_ms[f] = now_ms + guard_ms;
-        }
-    }
-
-  return set;
+  guards_[band].until_ms[field] = now_ms + guard_ms;
 }
 
 FlexBandLevels::LevelSet FlexBandLevels::peek (QString const& band) const

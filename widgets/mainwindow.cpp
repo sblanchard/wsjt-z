@@ -2362,6 +2362,13 @@ void MainWindow::readSettings()
 
           ui->outAttenuation->setMaximum(max_watts);
 
+          QString const startup_band =
+              ui->bandComboBox->currentText().trimmed();
+          qint64 const startup_now =
+              QDateTime::currentMSecsSinceEpoch();
+          FlexBandLevels::LevelSet const startup_levels =
+              m_flexBandLevels.peek(startup_band);
+
           // W7PP : restore the operator's saved watts when the radio
           // permits power changes; otherwise show the radio's own
           // report and keep the control disabled.
@@ -2369,11 +2376,6 @@ void MainWindow::readSettings()
 
           if (changes_allowed != 0)
             {
-              FlexBandLevels::LevelSet const startup_levels =
-                  m_flexBandLevels.apply(
-                      ui->bandComboBox->currentText().trimmed(),
-                      QDateTime::currentMSecsSinceEpoch());
-
               int const stored_watts =
                   startup_levels.values[FlexBandLevels::RfWatts];
 
@@ -2402,6 +2404,8 @@ void MainWindow::readSettings()
                               * 100.0
                               / double(max_watts)),
                           100));
+                  m_flexBandLevels.arm_guard(
+                      startup_band, FlexBandLevels::RfWatts, startup_now);
                 }
 
               ui->outAttenuation->setEnabled(true);
@@ -2413,6 +2417,33 @@ void MainWindow::readSettings()
               ui->outAttenuation->setEnabled(false);
               ui->outAttenuation->setToolTip(
                   tr("The radio does not currently allow RF power changes"));
+            }
+
+          // Restore slice AF gain and DAX gains for the starting band too.
+          // Without this, pollFlexBandLevels() (running once a second) would
+          // overwrite the operator's saved values for this band with
+          // whatever the radio happens to report before a real band hop
+          // ever calls switchBand() to push them back.
+          if (startup_levels.values[FlexBandLevels::SliceAfGain] >= 0)
+            {
+              m_config.transceiver_slice_af_gain(
+                  startup_levels.values[FlexBandLevels::SliceAfGain]);
+              m_flexBandLevels.arm_guard(
+                  startup_band, FlexBandLevels::SliceAfGain, startup_now);
+            }
+          if (startup_levels.values[FlexBandLevels::DaxRxGain] >= 0)
+            {
+              m_config.transceiver_dax_gain(
+                  startup_levels.values[FlexBandLevels::DaxRxGain], false);
+              m_flexBandLevels.arm_guard(
+                  startup_band, FlexBandLevels::DaxRxGain, startup_now);
+            }
+          if (startup_levels.values[FlexBandLevels::DaxTxGain] >= 0)
+            {
+              m_config.transceiver_dax_gain(
+                  startup_levels.values[FlexBandLevels::DaxTxGain], true);
+              m_flexBandLevels.arm_guard(
+                  startup_band, FlexBandLevels::DaxTxGain, startup_now);
             }
 
           ui->outAttenuation->setProperty(
@@ -17705,9 +17736,9 @@ void MainWindow::switchBand(int row) {
 
         if (m_config.is_flex_native_rig()) {
             QString const new_band = ui->bandComboBox->currentText ().trimmed ();
+            qint64 const arrival_now = QDateTime::currentMSecsSinceEpoch ();
             FlexBandLevels::LevelSet const levels =
-                m_flexBandLevels.apply (new_band,
-                                        QDateTime::currentMSecsSinceEpoch ());
+                m_flexBandLevels.peek (new_band);
 
             bool allowed_ok = false;
             int const changes_allowed =
@@ -17729,19 +17760,27 @@ void MainWindow::switchBand(int row) {
                 m_config.transceiver_tx_rf_power_level (
                     qBound (0, qRound (double (watts) * 100.0 / double (max_watts)),
                             100));
+                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::RfWatts,
+                                            arrival_now);
             }
 
             if (levels.values[FlexBandLevels::SliceAfGain] >= 0) {
                 m_config.transceiver_slice_af_gain (
                     levels.values[FlexBandLevels::SliceAfGain]);
+                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::SliceAfGain,
+                                            arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxRxGain] >= 0) {
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxRxGain], false);
+                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::DaxRxGain,
+                                            arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxTxGain] >= 0) {
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxTxGain], true);
+                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::DaxTxGain,
+                                            arrival_now);
             }
         }
 
