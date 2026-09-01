@@ -22,12 +22,10 @@ FlexBandLevels::LevelSet::LevelSet ()
     }
 }
 
-FlexBandLevels::Guard::Guard ()
+FlexBandLevels::Pending::Pending ()
+  : until_ms {0}
+  , value {-1}
 {
-  for (int f = 0; f < FieldCount; ++f)
-    {
-      until_ms[f] = 0;
-    }
 }
 
 QString const& FlexBandLevels::settings_key ()
@@ -51,27 +49,37 @@ void FlexBandLevels::capture (QString const& band, Field field,
       return;
     }
 
-  QHash<QString, Guard>::iterator g = guards_.find (band);
-  if (g != guards_.end () && now_ms < g->until_ms[field])
+  if (now_ms < pending_[field].until_ms)
     {
-      // This is our own push coming back. Consume the guard so the
-      // next change -- a real one -- is recorded.
-      g->until_ms[field] = 0;
+      if (value == pending_[field].value)
+        {
+          // Our own push coming back. Consume the guard so the next
+          // change -- a real one -- is recorded. Nothing to store: the
+          // pushed value is already what this field holds, and this
+          // sample may well belong to a band we have since left.
+          pending_[field].until_ms = 0;
+          return;
+        }
+
+      // Not what we pushed, so it is a reading the radio produced
+      // before our command landed -- the source is a poll of a sticky
+      // property, not an event stream. Drop it, and leave the guard
+      // armed: the real echo has not arrived yet.
       return;
     }
 
   bands_[band].values[field] = value;
 }
 
-void FlexBandLevels::arm_guard (QString const& band, Field field,
-                                qint64 now_ms)
+void FlexBandLevels::arm_guard (Field field, int value, qint64 now_ms)
 {
-  if (band.isEmpty () || field < 0 || field >= FieldCount)
+  if (field < 0 || field >= FieldCount)
     {
       return;
     }
 
-  guards_[band].until_ms[field] = now_ms + guard_ms;
+  pending_[field].until_ms = now_ms + guard_ms;
+  pending_[field].value = value;
 }
 
 FlexBandLevels::LevelSet FlexBandLevels::peek (QString const& band) const

@@ -2396,16 +2396,28 @@ void MainWindow::readSettings()
               // before the operator takes over.
               if (display_watts != current_watts)
                 {
-                  m_config.transceiver_tx_rf_power_level(
+                  int const display_percent =
                       qBound(
                           0,
                           qRound(
                               double(display_watts)
                               * 100.0
                               / double(max_watts)),
-                          100));
+                          100);
+                  m_config.transceiver_tx_rf_power_level(display_percent);
+                  // Guard on the watts the echo will carry, not the
+                  // watts pushed: the percent round trip may not be
+                  // exact. See switchBand().
                   m_flexBandLevels.arm_guard(
-                      startup_band, FlexBandLevels::RfWatts, startup_now);
+                      FlexBandLevels::RfWatts,
+                      qBound(
+                          0,
+                          qRound(
+                              double(display_percent)
+                              * double(max_watts)
+                              / 100.0),
+                          max_watts),
+                      startup_now);
                 }
 
               ui->outAttenuation->setEnabled(true);
@@ -2429,21 +2441,27 @@ void MainWindow::readSettings()
               m_config.transceiver_slice_af_gain(
                   startup_levels.values[FlexBandLevels::SliceAfGain]);
               m_flexBandLevels.arm_guard(
-                  startup_band, FlexBandLevels::SliceAfGain, startup_now);
+                  FlexBandLevels::SliceAfGain,
+                  startup_levels.values[FlexBandLevels::SliceAfGain],
+                  startup_now);
             }
           if (startup_levels.values[FlexBandLevels::DaxRxGain] >= 0)
             {
               m_config.transceiver_dax_gain(
                   startup_levels.values[FlexBandLevels::DaxRxGain], false);
               m_flexBandLevels.arm_guard(
-                  startup_band, FlexBandLevels::DaxRxGain, startup_now);
+                  FlexBandLevels::DaxRxGain,
+                  startup_levels.values[FlexBandLevels::DaxRxGain],
+                  startup_now);
             }
           if (startup_levels.values[FlexBandLevels::DaxTxGain] >= 0)
             {
               m_config.transceiver_dax_gain(
                   startup_levels.values[FlexBandLevels::DaxTxGain], true);
               m_flexBandLevels.arm_guard(
-                  startup_band, FlexBandLevels::DaxTxGain, startup_now);
+                  FlexBandLevels::DaxTxGain,
+                  startup_levels.values[FlexBandLevels::DaxTxGain],
+                  startup_now);
             }
 
           ui->outAttenuation->setProperty(
@@ -17780,33 +17798,44 @@ void MainWindow::switchBand(int row) {
                 && max_ok && max_watts > 0) {
                 int const watts =
                     qBound (0, levels.values[FlexBandLevels::RfWatts], max_watts);
+                int const percent =
+                    qBound (0, qRound (double (watts) * 100.0 / double (max_watts)),
+                            100);
                 m_block_pwr_tooltip = true;
                 ui->outAttenuation->setValue (watts);
                 m_block_pwr_tooltip = false;
-                m_config.transceiver_tx_rf_power_level (
-                    qBound (0, qRound (double (watts) * 100.0 / double (max_watts)),
-                            100));
-                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::RfWatts,
-                                            arrival_now);
+                m_config.transceiver_tx_rf_power_level (percent);
+                // Arm the guard on the watts the echo will actually
+                // carry: the radio reports rfpower percent, which
+                // pollFlexBandLevels() converts back to watts, and that
+                // round trip need not land on the exact watts pushed.
+                m_flexBandLevels.arm_guard (
+                    FlexBandLevels::RfWatts,
+                    qBound (0, qRound (double (percent) * double (max_watts) / 100.0),
+                            max_watts),
+                    arrival_now);
             }
 
             if (levels.values[FlexBandLevels::SliceAfGain] >= 0) {
                 m_config.transceiver_slice_af_gain (
                     levels.values[FlexBandLevels::SliceAfGain]);
-                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::SliceAfGain,
-                                            arrival_now);
+                m_flexBandLevels.arm_guard (
+                    FlexBandLevels::SliceAfGain,
+                    levels.values[FlexBandLevels::SliceAfGain], arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxRxGain] >= 0) {
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxRxGain], false);
-                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::DaxRxGain,
-                                            arrival_now);
+                m_flexBandLevels.arm_guard (
+                    FlexBandLevels::DaxRxGain,
+                    levels.values[FlexBandLevels::DaxRxGain], arrival_now);
             }
             if (levels.values[FlexBandLevels::DaxTxGain] >= 0) {
                 m_config.transceiver_dax_gain (
                     levels.values[FlexBandLevels::DaxTxGain], true);
-                m_flexBandLevels.arm_guard (new_band, FlexBandLevels::DaxTxGain,
-                                            arrival_now);
+                m_flexBandLevels.arm_guard (
+                    FlexBandLevels::DaxTxGain,
+                    levels.values[FlexBandLevels::DaxTxGain], arrival_now);
             }
         }
 

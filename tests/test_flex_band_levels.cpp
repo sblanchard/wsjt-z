@@ -69,8 +69,9 @@ private slots:
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
 
-    // Pushing to the radio arms the guard for that field.
-    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
+    // Pushing to the radio arms the guard for that field, on the value
+    // being pushed.
+    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
 
     // The radio echoes the value straight back: dropped.
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
@@ -85,7 +86,7 @@ private slots:
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
+    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
 
     // Nothing echoed. After the 2s timeout, captures land again.
     levels.capture ("20m", FlexBandLevels::RfWatts, 70, 4100);
@@ -96,10 +97,56 @@ private slots:
   {
     FlexBandLevels levels;
     levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.arm_guard ("20m", FlexBandLevels::RfWatts, 2000);
+    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
 
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 42, 2100);
     QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 42);
+  }
+
+  // The capture source is a once-a-second poll of a sticky property,
+  // not an event stream, so the first sample after a push normally
+  // still carries the PREVIOUS band's value. It must not be stored --
+  // that would overwrite this band's level with the last band's -- and
+  // it must not consume the guard, or the real echo would then land as
+  // if it were an operator change.
+  void a_stale_sample_inside_the_window_neither_lands_nor_clears ()
+  {
+    FlexBandLevels levels;
+    levels.capture ("20m", FlexBandLevels::SliceAfGain, 40, 1000);
+
+    // Arriving on 20m pushes 40 and arms the guard on it.
+    levels.arm_guard (FlexBandLevels::SliceAfGain, 40, 2000);
+
+    // One second later the poll still reports 75, the value the radio
+    // held on the band we just left.
+    levels.capture ("20m", FlexBandLevels::SliceAfGain, 75, 3000);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 40);
+
+    // The genuine echo arrives while the guard is still armed: still
+    // recognised, still dropped, and now the guard is consumed.
+    levels.capture ("20m", FlexBandLevels::SliceAfGain, 40, 3500);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 40);
+
+    // Guard gone: a real later change lands.
+    levels.capture ("20m", FlexBandLevels::SliceAfGain, 75, 3600);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 75);
+  }
+
+  // Guards are per field, not per band: an echo that arrives after a
+  // hop must not be recorded against the band that happens to be
+  // current when it lands.
+  void an_echo_arriving_after_a_hop_is_not_stored_on_the_new_band ()
+  {
+    FlexBandLevels levels;
+    levels.capture ("20m", FlexBandLevels::DaxRxGain, 30, 1000);
+    levels.capture ("40m", FlexBandLevels::DaxRxGain, 80, 1000);
+
+    // Push 30 on 20m, then hop to 40m before the echo comes back.
+    levels.arm_guard (FlexBandLevels::DaxRxGain, 30, 2000);
+    levels.capture ("40m", FlexBandLevels::DaxRxGain, 30, 2100);
+
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::DaxRxGain], 80);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::DaxRxGain], 30);
   }
 
   // A field the caller never actually pushed -- and therefore never
