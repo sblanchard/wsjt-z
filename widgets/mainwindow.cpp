@@ -1257,6 +1257,10 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   updateBandActivityTitleLabel();
   update_mode_switch_status_label ();
   connect (ui->cb_bandHopper, &QGroupBox::toggled, this, [this] (bool) {
+      if (!ui->cb_bandHopper->isChecked ()) {
+          m_bandSettleGate.disarm ();
+          m_deferredAutoTune = false;
+      }
       update_mode_switch_status_label ();
     });
   connect (ui->pte_bandHopper, &QPlainTextEdit::textChanged, this, [this] {
@@ -4293,6 +4297,12 @@ void MainWindow::on_autoButton_clicked (bool checked)
       // Operator retry is allowed only after a healthy recheck.
       m_nativeFlexSafetyInhibited = false;
     }
+  // Clicking Enable Tx is the operator saying "transmit anyway", so it
+  // ends the antenna settle hold. Placed after the safety-trip guard
+  // above: a refused request must not clear the hold.
+  if (checked) {
+      m_bandSettleGate.override_hold ();
+  }
   // Z
   if (checked) tx_watchdog(false);
   stopWRTimer.stop();             // stop a running Tx3 timer
@@ -5189,6 +5199,12 @@ void MainWindow::update_mode_switch_status_label ()
     } else {
       ui->pb_BandChangeNow->setVisible (false);
     }
+
+  int const settle_left =
+      m_bandSettleGate.remaining_seconds (QDateTime::currentMSecsSinceEpoch());
+  if (settle_left > 0) {
+      parts << QString {"SETTLE %1s"}.arg (settle_left);
+  }
 
   mode_switch_status_label.setVisible (!parts.isEmpty ());
   if (parts.isEmpty ()) return;
@@ -8593,7 +8609,20 @@ void MainWindow::guiUpdate()
     int msgLength=txMsg.trimmed().length();
     if(msgLength==0 and !m_tune) on_stopTxButton_clicked();
 
-    if(g_iptt==0 and ((m_bTxTime and (fTR < 0.75) and (msgLength>0)) or m_tune)) {
+    if (m_mode != "FT8" && m_mode != "FT4" && m_mode != "FT2") {
+        m_bandSettleGate.disarm ();
+        m_deferredAutoTune = false;
+    }
+    qint64 const settle_now = QDateTime::currentMSecsSinceEpoch();
+    if (m_deferredAutoTune && !m_bandSettleGate.active (settle_now)) {
+        m_deferredAutoTune = false;
+        ui->tuneButton->setChecked (true);
+        on_tuneButton_clicked (true);
+        tuneButtonTimer.start (4000);
+    }
+
+    if(g_iptt==0 and ((m_bTxTime and (fTR < 0.75) and (msgLength>0)) or m_tune)
+       and !m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch())) {
       //### Allow late starts
       icw[0]=m_ncw;
       g_iptt = 1;
@@ -12750,6 +12779,16 @@ void MainWindow::on_rptSpinBox_valueChanged(int n)
 
 void MainWindow::on_tuneButton_clicked (bool checked)
 {
+  // A tune requested while the settle hold is still running is the
+  // operator overriding it. The deferred tune that guiUpdate() fires
+  // itself is only ever invoked once the hold has already expired, so
+  // it never reaches this branch.
+  if (checked) {
+      if (m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch())) {
+          m_bandSettleGate.override_hold ();
+      }
+      m_deferredAutoTune = false;
+  }
   // Z
   if (checked) tx_watchdog(false);
   // prevent tuning on top of a SuperFox message
@@ -17594,10 +17633,25 @@ void MainWindow::switchBand(int row) {
         // Keep one current-cycle vector so addSlot() cannot index an empty container.
         busySlots.prepend(QVector<int>());
         on_btn_clearIgnore_clicked();
+        // The antenna needs time to reach the new frequency. Hold off
+        // every transmission, the auto-tune carrier included, until it
+        // has had it. Flex Native VITA-49 only.
+        bool settling = false;
+        if (m_config.is_flex_native_rig() && m_config.band_settle_ms() > 0) {
+            m_bandSettleGate.arm (m_config.band_settle_ms(),
+                                  QDateTime::currentMSecsSinceEpoch());
+            settling = m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch());
+        }
+
         if (m_config.autoTune()) {
-            ui->tuneButton->setChecked (true);
-            on_tuneButton_clicked (true);
-            tuneButtonTimer.start(4000);
+            if (settling) {
+                // Fired by guiUpdate() when the hold expires.
+                m_deferredAutoTune = true;
+            } else {
+                ui->tuneButton->setChecked (true);
+                on_tuneButton_clicked (true);
+                tuneButtonTimer.start(4000);
+            }
         }
         if (ui->cbAutoCQ->isChecked()) {
             if (!m_config.autoTXFreq()) {

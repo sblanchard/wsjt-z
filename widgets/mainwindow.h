@@ -41,6 +41,7 @@
 #include "Configuration.hpp"
 #include "WSPR/WSPRBandHopping.hpp"
 #include "Transceiver/Transceiver.hpp"
+#include "Transceiver/BandSettleGate.hpp"
 #include "DisplayManual.hpp"
 #include "Network/PSKReporter.hpp"
 #include "UDPExamples/MessageServer.hpp"
@@ -571,6 +572,8 @@ private:
   Configuration m_config;
   LogBook m_logBook;            // must be after Configuration construction
   WSPRBandHopping m_WSPR_band_hopping;
+  BandSettleGate m_bandSettleGate;
+  bool m_deferredAutoTune {false};
   bool m_WSPR_tx_next;
   MessageBox m_rigErrorMessageBox;
   QScopedPointer<SampleDownloader> m_sampleDownloader;
