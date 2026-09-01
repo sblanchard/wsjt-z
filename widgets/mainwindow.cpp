@@ -1806,14 +1806,6 @@ void MainWindow::writeSettings()
       m_settings->setValue(
           "W7PPNativeFlexTxAudioAttenuation",
           ui->w7ppFlexTxAudioAttenuation->value());
-
-      if (ui->outAttenuation->property(
-              "w7ppNativeFlexPowerReady").toBool())
-        {
-          m_settings->setValue(
-              "W7PPNativeFlexRfWatts",
-              ui->outAttenuation->value());
-        }
     }
   else
     {
@@ -1842,6 +1834,7 @@ void MainWindow::writeSettings()
   m_settings->setValue ("CQTxfreq", ui->sbCQTxFreq->value ());
   m_settings->setValue("pwrBandTxMemory",m_pwrBandTxMemory);
   m_settings->setValue("pwrBandTuneMemory",m_pwrBandTuneMemory);
+  m_flexBandLevels.save (*m_settings);
   m_settings->setValue ("FT8AP", ui->actionEnable_AP_FT8->isChecked ());
   m_settings->setValue ("JT65AP", ui->actionEnable_AP_JT65->isChecked ());
   m_settings->setValue ("AutoClearAvg", ui->actionAuto_Clear_Avg->isChecked ());
@@ -2376,10 +2369,16 @@ void MainWindow::readSettings()
 
           if (changes_allowed != 0)
             {
+              FlexBandLevels::LevelSet const startup_levels =
+                  m_flexBandLevels.apply(
+                      ui->bandComboBox->currentText().trimmed(),
+                      QDateTime::currentMSecsSinceEpoch());
+
+              int const stored_watts =
+                  startup_levels.values[FlexBandLevels::RfWatts];
+
               int const saved_watts =
-                  m_settings->value(
-                      "W7PPNativeFlexRfWatts",
-                      current_watts).toInt();
+                  stored_watts >= 0 ? stored_watts : current_watts;
 
               display_watts =
                   qBound(0, saved_watts, max_watts);
@@ -2468,6 +2467,15 @@ void MainWindow::readSettings()
   }
   outBufSize=m_settings->value("OutBufSize",4096).toInt();
   ui->cbHoldTxFreq->setChecked (m_settings->value ("HoldTxFreq", false).toBool ());
+  m_flexBandLevels.load (*m_settings);
+
+  QStringList all_bands;
+  for (int i = 0; i < ui->bandComboBox->count (); ++i) {
+      QString const b = ui->bandComboBox->itemText (i).trimmed ();
+      if (!b.isEmpty ()) all_bands << b;
+  }
+  m_flexBandLevels.migrate_legacy_watts (*m_settings, all_bands);
+
   m_pwrBandTxMemory=m_settings->value("pwrBandTxMemory").toHash();
   m_pwrBandTuneMemory=m_settings->value("pwrBandTuneMemory").toHash();
   ui->actionEnable_AP_FT8->setChecked (m_settings->value ("FT8AP", false).toBool());
@@ -8447,6 +8455,11 @@ void MainWindow::guiUpdate()
   m_tRemaining=m_TRperiod - fmod(tsec,m_TRperiod);
   update_mode_switch_status_label ();
 
+  if (nsec != m_lastLevelPollSec) {
+      m_lastLevelPollSec = nsec;
+      pollFlexBandLevels ();
+  }
+
   // Reset FT8 MTD dedup buffer on period boundaries (~2 s before the cycle's
   // early decode fires). Mirrors wsjtx-improved:8296. Paired with removing the
   // reset inside decode(), which was wiping the buffer between the early and
@@ -13399,6 +13412,51 @@ void MainWindow::transmit (double snr)
   }
 }
 
+// Record whatever the radio currently reports for this band. Driven by
+// the FLEX status stream via qApp properties, so a level changed in
+// SmartSDR is captured exactly like one changed here.
+void MainWindow::pollFlexBandLevels ()
+{
+  if (!m_config.is_flex_native_rig ()) return;
+
+  QString const band = ui->bandComboBox->currentText ().trimmed ();
+  if (band.isEmpty ()) return;
+
+  qint64 const now = QDateTime::currentMSecsSinceEpoch ();
+
+  struct {
+    char const * property;
+    FlexBandLevels::Field field;
+  } const sources[] = {
+    {"W7PPNativeFlexSliceAfGain", FlexBandLevels::SliceAfGain},
+    {"W7PPNativeFlexDaxRxGain",   FlexBandLevels::DaxRxGain},
+    {"W7PPNativeFlexDaxTxGain",   FlexBandLevels::DaxTxGain}
+  };
+
+  for (unsigned i = 0; i < sizeof (sources) / sizeof (sources[0]); ++i) {
+      bool ok = false;
+      int const value = qApp->property (sources[i].property).toInt (&ok);
+      if (ok && value >= 0) {
+          m_flexBandLevels.capture (band, sources[i].field, value, now);
+      }
+  }
+
+  // RF watts is reported as an rfpower percentage; store the watts the
+  // operator actually sees on the slider.
+  bool max_ok = false;
+  int const max_watts =
+      qApp->property ("W7PPNativeFlexMaxInternalPaPower").toInt (&max_ok);
+  bool rf_ok = false;
+  int const rf_level = qApp->property ("W7PPNativeFlexRfPower").toInt (&rf_ok);
+
+  if (max_ok && max_watts > 0 && rf_ok && rf_level >= 0 && rf_level <= 100) {
+      int const watts =
+          qBound (0, qRound (double (rf_level) * double (max_watts) / 100.0),
+                  max_watts);
+      m_flexBandLevels.capture (band, FlexBandLevels::RfWatts, watts, now);
+  }
+}
+
 void MainWindow::on_outAttenuation_valueChanged (int a)
 {
   // W7PP :
@@ -13459,9 +13517,11 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
                   / double(max_watts)),
               100));
 
-      m_settings->setValue(
-          "W7PPNativeFlexRfWatts",
-          a);
+      m_flexBandLevels.capture (
+          ui->bandComboBox->currentText ().trimmed (),
+          FlexBandLevels::RfWatts,
+          a,
+          QDateTime::currentMSecsSinceEpoch ());
 
       // Do NOT fall through to SoundOutput attenuation.
       return;
@@ -17641,6 +17701,48 @@ void MainWindow::switchBand(int row) {
             m_bandSettleGate.arm (m_config.band_settle_ms(),
                                   QDateTime::currentMSecsSinceEpoch());
             settling = m_bandSettleGate.active (QDateTime::currentMSecsSinceEpoch());
+        }
+
+        if (m_config.is_flex_native_rig()) {
+            QString const new_band = ui->bandComboBox->currentText ().trimmed ();
+            FlexBandLevels::LevelSet const levels =
+                m_flexBandLevels.apply (new_band,
+                                        QDateTime::currentMSecsSinceEpoch ());
+
+            bool allowed_ok = false;
+            int const changes_allowed =
+                qApp->property ("W7PPNativeFlexRfPowerChangesAllowed")
+                    .toInt (&allowed_ok);
+            bool max_ok = false;
+            int const max_watts =
+                qApp->property ("W7PPNativeFlexMaxInternalPaPower")
+                    .toInt (&max_ok);
+
+            if (levels.values[FlexBandLevels::RfWatts] >= 0
+                && allowed_ok && changes_allowed != 0
+                && max_ok && max_watts > 0) {
+                int const watts =
+                    qBound (0, levels.values[FlexBandLevels::RfWatts], max_watts);
+                m_block_pwr_tooltip = true;
+                ui->outAttenuation->setValue (watts);
+                m_block_pwr_tooltip = false;
+                m_config.transceiver_tx_rf_power_level (
+                    qBound (0, qRound (double (watts) * 100.0 / double (max_watts)),
+                            100));
+            }
+
+            if (levels.values[FlexBandLevels::SliceAfGain] >= 0) {
+                m_config.transceiver_slice_af_gain (
+                    levels.values[FlexBandLevels::SliceAfGain]);
+            }
+            if (levels.values[FlexBandLevels::DaxRxGain] >= 0) {
+                m_config.transceiver_dax_gain (
+                    levels.values[FlexBandLevels::DaxRxGain], false);
+            }
+            if (levels.values[FlexBandLevels::DaxTxGain] >= 0) {
+                m_config.transceiver_dax_gain (
+                    levels.values[FlexBandLevels::DaxTxGain], true);
+            }
         }
 
         if (m_config.autoTune()) {

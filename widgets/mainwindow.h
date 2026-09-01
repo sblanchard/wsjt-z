@@ -42,6 +42,7 @@
 #include "WSPR/WSPRBandHopping.hpp"
 #include "Transceiver/Transceiver.hpp"
 #include "Transceiver/BandSettleGate.hpp"
+#include "Transceiver/FlexBandLevels.hpp"
 #include "DisplayManual.hpp"
 #include "Network/PSKReporter.hpp"
 #include "UDPExamples/MessageServer.hpp"
@@ -297,6 +298,7 @@ private slots:
   void on_readFreq_clicked();
   void on_RxFreqSpinBox_valueChanged(int n);
   void on_outAttenuation_valueChanged (int);
+  void pollFlexBandLevels ();
   void rigOpen ();
   void handle_transceiver_update (Transceiver::TransceiverState const&);
   void handle_transceiver_failure (QString const& reason);
@@ -573,7 +575,9 @@ private:
   LogBook m_logBook;            // must be after Configuration construction
   WSPRBandHopping m_WSPR_band_hopping;
   BandSettleGate m_bandSettleGate;
+  FlexBandLevels m_flexBandLevels;
   bool m_deferredAutoTune {false};
+  int m_lastLevelPollSec {-1};
   bool m_WSPR_tx_next;
   MessageBox m_rigErrorMessageBox;
   QScopedPointer<SampleDownloader> m_sampleDownloader;
