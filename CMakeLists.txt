@@ -220,6 +220,7 @@ set (wsjt_qt_CXXSRCS
   Transceiver/NativeFlexRadioSelection.cpp
   Transceiver/NativeFlexTransceiver.cpp
   Transceiver/NativeFlexSafetyMonitor.cpp
+  Transceiver/BandSettleGate.cpp
   Network/NetworkMessage.cpp
   Network/MessageClient.cpp
   widgets/LettersSpinBox.cpp

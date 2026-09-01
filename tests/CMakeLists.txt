@@ -64,6 +64,16 @@ else ()
 endif ()
 add_test (test_tx_rf_power_plumbing test_tx_rf_power_plumbing)
 
+add_executable (test_band_settle_gate test_band_settle_gate.cpp)
+target_include_directories (test_band_settle_gate PRIVATE ${CMAKE_BINARY_DIR})
+target_link_libraries (test_band_settle_gate wsjt_qt wsjt_cxx Qt5::Test)
+if ((NOT ${OPENMP_FOUND}) OR APPLE)
+  target_link_libraries (test_band_settle_gate wsjt_fort wsjt_cxx)
+else ()
+  target_link_libraries (test_band_settle_gate wsjt_fort_omp wsjt_cxx)
+endif ()
+add_test (test_band_settle_gate test_band_settle_gate)
+
 # The socket-compat shim and the code under test call Winsock
 # directly; the import library is only transitive where Qt5::Network
 # is linked, so name it explicitly for every test that can reach it.
@@ -73,4 +83,5 @@ if (WIN32)
   target_link_libraries (test_native_flex_factory ws2_32)
   target_link_libraries (test_native_flex_selection ws2_32)
   target_link_libraries (test_tx_rf_power_plumbing ws2_32)
+  target_link_libraries (test_band_settle_gate ws2_32)
 endif ()
