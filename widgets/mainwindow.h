@@ -742,6 +742,7 @@ private:
   quint64 m_flex_vita_watchdog_packets {0};
   bool    m_flexPowerUiArmed {false};           // W7PP : the RF power status retries are armed for the current rig
   bool    m_flexStartupLevelsRestored {false};  // W7PP : the starting band's gains are pushed once per arming round
+  qint64  m_flexRfPowerPushedAt {0};            // W7PP : when the operator last sent an RF power level, ms since epoch
   bool    inSettings = false;
   bool    m_diskData;
   bool    m_loopall;
