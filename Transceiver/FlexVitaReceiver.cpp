@@ -574,6 +574,21 @@ struct FlexVitaReceiver::Impl
   void ensureDaxRouting(SOCKET tcp)
   {
     //
+    // With a SmartSDR GUI client on the radio this fallback must stay
+    // silent.
+    //
+    // The receiver starts before the Native FLEX CAT backend, so the
+    // first in-use slice it sees is the SmartSDR operator's, not
+    // WSJT's - re-routing it would steal the other operator's audio
+    // path. In coexistence the transceiver's explicit
+    // "slice s <its own slice> dax=<channel>" is the only routing
+    // allowed; this blind fallback exists solely for the headless
+    // case, where nothing else can do it.
+    //
+    if (smartSdrGuiPresent.load())
+      return;
+
+    //
     // The radio confirms the binding on our own stream status; once
     // it does there is nothing left to do.
     //
@@ -662,6 +677,31 @@ struct FlexVitaReceiver::Impl
         apiClientHandle =
             parseNumericId(
                 "0x" + line.substr(1));
+      }
+
+    //
+    // Client status, e.g.
+    //
+    //   S1A2B3C4|client 0x1AB2C3D4 connected client_id=... program=SmartSDR-Win ...
+    //
+    // Only a flag is wanted here: is somebody else's SmartSDR GUI
+    // driving this radio? The match on "program=SmartSDR" is a
+    // deliberate prefix, broader than the transceiver's
+    // "program=SmartSDR-Win" mode decision: whichever SmartSDR
+    // flavour is present, the fallback routing below must never
+    // re-route a slice this fork does not own.
+    //
+    // Never cleared: a GUI client that disconnects mid-session leaves
+    // the transceiver's own explicit routing in place, so there is
+    // nothing for the fallback to fix, and re-enabling it on a
+    // disconnect line would only re-open the window it guards.
+    //
+    if ('S' == line.front()
+        && std::string::npos != line.find("|client ")
+        && std::string::npos != line.find(" connected")
+        && std::string::npos != line.find("program=SmartSDR"))
+      {
+        smartSdrGuiPresent.store(true);
       }
 
     //
@@ -1002,6 +1042,7 @@ struct FlexVitaReceiver::Impl
     firstInUseSlice.store(-1);
     daxChannelFed.store(false);
     streamHasSlice.store(false);
+    smartSdrGuiPresent.store(false);
     lastRouteRequest = {};
     lastDiagnostic = {};
     nextCommandSequence = 8;
@@ -1165,7 +1206,14 @@ struct FlexVitaReceiver::Impl
 
     if (!sendCommand(tcp, 3, "sub slice all")
         || !sendCommand(tcp, 4, "sub audio_stream all")
-        || !sendCommand(tcp, 5, "sub dax all"))
+        || !sendCommand(tcp, 5, "sub dax all")
+        //
+        // Client status too, so this connection can tell whether a
+        // SmartSDR GUI client owns the radio (see ensureDaxRouting()).
+        // The 3..7 numbering below is fixed by the handshake, so this
+        // extra command takes the next free sequence instead.
+        //
+        || !sendCommand(tcp, nextCommandSequence++, "sub client all"))
       {
         fail("Flex RX subscription failed");
         return;
@@ -1353,6 +1401,13 @@ struct FlexVitaReceiver::Impl
   // stream is attached to nothing and the packets carry silence.
   //
   std::atomic<bool> streamHasSlice {false};
+
+  //
+  // Set once a "|client ... connected ... program=SmartSDR..." status
+  // line is seen on this connection. It disables the fallback routing
+  // above for the rest of the session.
+  //
+  std::atomic<bool> smartSdrGuiPresent {false};
 
   std::chrono::steady_clock::time_point lastRouteRequest {};
   std::chrono::steady_clock::time_point lastDiagnostic {};

@@ -88,6 +88,7 @@ private slots:
   void counts_malformed_packets ();
   void start_fails_on_bad_address ();
   void routes_a_slice_into_the_dax_channel ();
+  void does_not_route_when_smartsdr_gui_is_connected ();
   void leaves_existing_dax_routing_alone ();
   void reasserts_routing_while_the_stream_is_unbound ();
 
@@ -107,11 +108,16 @@ private:
   // reports when nothing routes a slice into the DAX channel.
   bool           streamUnbound_ {false};
 
+  // When true the fake radio answers "sub client all" with a connected
+  // SmartSDR GUI client, i.e. another operator owns the radio.
+  bool           announceSmartSdrClient_ {false};
+
   int sliceDaxCommandCount (int slice, int channel) const;
 
   QByteArrayList commands_;
 
   bool sentSliceDaxCommand (int slice, int channel) const;
+  bool sentAnySliceCommand () const;
 };
 
 int TestFlexVitaReceiver::sliceDaxCommandCount (int slice, int channel) const
@@ -146,6 +152,17 @@ bool TestFlexVitaReceiver::sentSliceDaxCommand (int slice, int channel) const
   return false;
 }
 
+bool TestFlexVitaReceiver::sentAnySliceCommand () const
+{
+  for (auto const& command : commands_)
+    {
+      if (command.contains ("slice s "))
+        return true;
+    }
+
+  return false;
+}
+
 void TestFlexVitaReceiver::init ()
 {
   server_ = new QTcpServer {this};
@@ -172,6 +189,15 @@ void TestFlexVitaReceiver::init ()
               QByteArray const line = client_->readLine ().trimmed ();
 
               commands_.append (line);
+
+              if (announceSmartSdrClient_ && line.contains ("sub client all"))
+                {
+                  client_->write ("S" +
+                      QByteArray::number (FakeClientHandle, 16) +
+                      "|client 0x1AB2C3D4 connected"
+                      " client_id=8ED2C0A5-2D50-4B33-9A5C-2E1F8F6D0C11"
+                      " program=SmartSDR-Win station=BENCH local_ptt=1\n");
+                }
 
               if (announceSlice_ && line.contains ("sub slice all"))
                 {
@@ -219,6 +245,8 @@ void TestFlexVitaReceiver::cleanup ()
   announceSlice_   = false;
   sliceDaxChannel_ = 0;
   streamUnbound_   = false;
+
+  announceSmartSdrClient_ = false;
 }
 
 bool TestFlexVitaReceiver::waitForStreaming (FlexVitaReceiver& receiver, int timeoutMs)
@@ -501,6 +529,43 @@ void TestFlexVitaReceiver::routes_a_slice_into_the_dax_channel ()
     }
 
   QVERIFY2 (sentSliceDaxCommand (0, FakeDaxChannel),
+            qPrintable ("commands seen: " +
+                        QString::fromLatin1 (commands_.join (" / "))));
+
+  receiver.stop ();
+}
+
+//
+// Same unrouted radio as above, but a SmartSDR GUI client owns it. The
+// receiver starts before the Native FLEX CAT backend, so the only
+// in-use slice it can see here is the other operator's - the fallback
+// must stay silent and leave the routing to the transceiver, which
+// names its own slice explicitly.
+//
+void TestFlexVitaReceiver::does_not_route_when_smartsdr_gui_is_connected ()
+{
+  announceSlice_          = true;
+  sliceDaxChannel_        = 0;
+  announceSmartSdrClient_ = true;
+
+  FlexVitaReceiver receiver;
+
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
+
+  QVERIFY2 (receiver.start (configuration),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QVERIFY2 (waitForStreaming (receiver),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  // The same window routes_a_slice_into_the_dax_channel () needs.
+  QDeadlineTimer settle {3000};
+
+  while (!settle.hasExpired ())
+    QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+
+  QVERIFY2 (!sentAnySliceCommand (),
             qPrintable ("commands seen: " +
                         QString::fromLatin1 (commands_.join (" / "))));
 
