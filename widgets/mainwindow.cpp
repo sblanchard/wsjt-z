@@ -2263,6 +2263,8 @@ void MainWindow::readSettings()
     {
       ui->w7ppFlexRfPowerLabel->setVisible(true);
       ui->w7ppFlexRfPower->setVisible(true);
+      ui->w7ppFlexRfPowerValue->setVisible(true);
+      ui->w7ppFlexRfPowerValue->setText(QStringLiteral("-- %"));
 
       ui->w7ppFlexRfPower->setProperty(
           "w7ppNativeFlexPowerReady", false);
@@ -2284,6 +2286,7 @@ void MainWindow::readSettings()
     {
       ui->w7ppFlexRfPowerLabel->setVisible(false);
       ui->w7ppFlexRfPower->setVisible(false);
+      ui->w7ppFlexRfPowerValue->setVisible(false);
     }
   // W7PP : restore Native FLEX RX operator gain setting.
   ui->w7ppFlexRxGainSlider->setValue(
@@ -3182,6 +3185,7 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
       {
         ui->w7ppFlexRfPowerLabel->setVisible (!ui->cbMini->isChecked ());
         ui->w7ppFlexRfPower->setVisible (!ui->cbMini->isChecked ());
+        ui->w7ppFlexRfPowerValue->setVisible (!ui->cbMini->isChecked ());
 
         // Only a genuine non-Flex -> Flex transition puts the control
         // back into its waiting state and re-arms the status retries.
@@ -3204,6 +3208,7 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
       {
         ui->w7ppFlexRfPowerLabel->setVisible (false);
         ui->w7ppFlexRfPower->setVisible (false);
+        ui->w7ppFlexRfPowerValue->setVisible (false);
         ui->w7ppFlexRfPower->setEnabled (false);
         ui->w7ppFlexRfPower->setProperty ("w7ppNativeFlexPowerReady", false);
         m_flexPowerUiArmed = false;
@@ -13364,6 +13369,9 @@ void MainWindow::refreshNativeFlexPowerUi ()
 
   m_block_pwr_tooltip = true;
   ui->w7ppFlexRfPower->setValue(display);
+  // setValue() is silent when the value is unchanged, so write the
+  // readout here rather than rely on the valueChanged slot.
+  ui->w7ppFlexRfPowerValue->setText(QStringLiteral("%1 %").arg(display));
   m_block_pwr_tooltip = false;
 
   if (changes_allowed != 0)
@@ -13575,6 +13583,10 @@ void MainWindow::on_w7ppFlexRfPower_valueChanged (int percent)
     {
       return;
     }
+
+  // Live readout under the slider, for every change including the
+  // ones that arrive from the radio.
+  ui->w7ppFlexRfPowerValue->setText (QStringLiteral ("%1 %").arg (percent));
 
   QString tt_str = tr ("Transmit RF power %1 %").arg (percent);
 
@@ -17022,6 +17034,7 @@ void MainWindow::on_cbMini_toggled(bool b) {
         // screen at all.
         ui->w7ppFlexRfPower->setVisible (!b && m_config.is_flex_native_rig ());
         ui->w7ppFlexRfPowerLabel->setVisible (!b && m_config.is_flex_native_rig ());
+        ui->w7ppFlexRfPowerValue->setVisible (!b && m_config.is_flex_native_rig ());
         ui->logQSOButton->setVisible(!b);
         ui->monitorButton->setVisible(!b);
         ui->DecodeButton->setVisible(!b);
