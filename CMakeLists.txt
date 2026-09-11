@@ -77,8 +77,12 @@ set (PROJECT_SAMPLES_URL https://sourceforge.net/projects/wsjt/files/)
 #set (PROJECT_SAMPLES_UPLOAD_DEST frs.sourceforge.net:/home/frs/project/wsjt/)
 # WSJT-Z mod version suffix shown in UI and package metadata.
 set (VERSION_Z "2.0.19")
+# Native FLEX VITA-49 fork build number. Bumped for every release of this
+# fork; VERSION_Z stays the WSJT-Z base it tracks. Release tags are
+# v${VERSION_Z}-flex-vita.${VERSION_FLEX_VITA}.
+set (VERSION_FLEX_VITA "3")
 message (STATUS "******************************************************")
-message (STATUS "Building ${PROJECT_BUNDLE_NAME} ${VERSION_Z} (base WSJT-X ${PROJECT_VERSION}) for ${CMAKE_SYSTEM_NAME}-${PROJECT_ARCHITECTURE}")
+message (STATUS "Building ${PROJECT_BUNDLE_NAME} ${VERSION_Z} Native FLEX VITA-49 build ${VERSION_FLEX_VITA} (base WSJT-X ${PROJECT_VERSION}) for ${CMAKE_SYSTEM_NAME}-${PROJECT_ARCHITECTURE}")
 message (STATUS "******************************************************")
 
 # make sure that the default configuration is a RELEASE
@@ -1960,7 +1964,7 @@ set (CPACK_PACKAGE_NAME "wsjtz")
 set (CPACK_PACKAGE_VERSION_Z "${VERSION_Z}")
 set (CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set (CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-set (CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}-${CPACK_PACKAGE_VERSION_Z}")
+set (CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}-${CPACK_PACKAGE_VERSION_Z}-flex-vita.${VERSION_FLEX_VITA}")
 
 
 

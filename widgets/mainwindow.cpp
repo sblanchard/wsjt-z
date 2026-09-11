@@ -3359,7 +3359,7 @@ void MainWindow::showStatusMessage(const QString& statusMsg)
 void MainWindow::update_window_title ()
 {
   auto title = program_title () + " (WSJT-Z MOD by SQ9FVE " + QStringLiteral (VERSION_Z)
-      + " · Native VITA-49 by W7PP · F4JZW)";
+      + " · Native VITA-49 build " + QStringLiteral (VERSION_FLEX_VITA) + " by W7PP · F4JZW)";
   auto const callsign = m_config.my_callsign ();
   if (!callsign.isEmpty ())
     {
