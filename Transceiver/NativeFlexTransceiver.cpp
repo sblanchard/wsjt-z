@@ -294,7 +294,7 @@ void NativeFlexTransceiver::capture_smart_sdr_client(
     QByteArray const& line)
 {
   /*
-   * Read-only detection of an already-connected SmartSDR GUI client.
+   * Read-only detection of an already-connected GUI client.
    *
    * This helper changes no radio state and does not bind clients.
    *
@@ -302,12 +302,27 @@ void NativeFlexTransceiver::capture_smart_sdr_client(
    * window only.
    *
    * The donor runs this on every status line for the life of the
-   * session, so a SmartSDR-Win started AFTER a headless WSJT-Z flips
+   * session, so a GUI client started AFTER a headless WSJT-Z flips
    * smart_sdr_present_ mid-session. Everything downstream then
    * switches path against a session that already took the headless
    * route: do_ptt() starts writing "slice s <n> tx=1 mode=digu" and
    * do_stop() starts restoring a previous_tx_slice_id_ that was never
    * captured. The mode is decided once, around "sub client all".
+   *
+   * DEVIATION from W7PP: any GUI client counts, not only
+   * "program=SmartSDR-Win".
+   *
+   * The donor only ever knew SmartSDR for Windows; this operator
+   * drives the radio from SmartSDR for Mac, and other GUI clients
+   * (AetherSDR, ...) exist. The discriminator is therefore the
+   * non-empty "client_id=" field, which the radio reports only for
+   * clients that registered with "client gui": this fork's own API
+   * connections (the RX bridge, the safety monitor) and other
+   * API-only programs have none, so they never trigger coexistence.
+   * The program name is no longer consulted.
+   *
+   * With several GUI clients connected the last one reported wins;
+   * that is donor behaviour, unchanged.
    */
   if (!collecting_clients_)
     {
@@ -315,39 +330,48 @@ void NativeFlexTransceiver::capture_smart_sdr_client(
     }
 
   if (
-      line.startsWith('S')
-      && line.contains("|client ")
-      && line.contains(" connected")
-      && line.contains("program=SmartSDR-Win"))
+      !line.startsWith('S')
+      || !line.contains("|client ")
+      || !line.contains(" connected"))
     {
-      smart_sdr_present_ = true;
-
-      QByteArray const marker {"client_id="};
-
-      int const marker_start =
-          line.indexOf(marker);
-
-      if (marker_start >= 0)
-        {
-          int const value_start =
-              marker_start + marker.size();
-
-          int value_end =
-              line.indexOf(' ', value_start);
-
-          if (value_end < 0)
-            {
-              value_end = line.size();
-            }
-
-          smart_sdr_client_id_ =
-              QString::fromLatin1(
-                  line.mid(
-                      value_start,
-                      value_end - value_start))
-                  .trimmed();
-        }
+      return;
     }
+
+  QByteArray const marker {"client_id="};
+
+  int const marker_start =
+      line.indexOf(marker);
+
+  if (marker_start < 0)
+    {
+      return;
+    }
+
+  int const value_start =
+      marker_start + marker.size();
+
+  int value_end =
+      line.indexOf(' ', value_start);
+
+  if (value_end < 0)
+    {
+      value_end = line.size();
+    }
+
+  QString const client_id =
+      QString::fromLatin1(
+          line.mid(
+              value_start,
+              value_end - value_start))
+          .trimmed();
+
+  if (client_id.isEmpty())
+    {
+      return;
+    }
+
+  smart_sdr_present_ = true;
+  smart_sdr_client_id_ = client_id;
 }
 
 void NativeFlexTransceiver::capture_owned_slice(
@@ -1680,11 +1704,12 @@ int NativeFlexTransceiver::do_start()
    *
    * First inspect the clients already attached to the radio.
    *
-   * If SmartSDR-Win is present, W7PP remains a non-GUI API
-   * client.  It snapshots all existing slices, creates one
-   * additional slice, and captures only that new slice number.
+   * If a GUI client (SmartSDR-Win, SmartSDR-Mac, AetherSDR, ...)
+   * is present, W7PP remains a non-GUI API client.  It snapshots
+   * all existing slices, creates one additional slice, and
+   * captures only that new slice number.
    *
-   * If SmartSDR-Win is absent, preserve the accepted headless
+   * If no GUI client is present, preserve the accepted headless
    * client-gui ownership path.
    */
   collecting_clients_ = true;
@@ -1719,6 +1744,13 @@ int NativeFlexTransceiver::do_start()
 
   if (smart_sdr_present_)
     {
+      /*
+       * Defensive only: capture_smart_sdr_client() now sets
+       * smart_sdr_present_ solely when it also has a non-empty
+       * client id, so present implies a usable id. Kept because an
+       * unbound "client bind client_id=" would be worse than a
+       * clear failure.
+       */
       if (smart_sdr_client_id_.isEmpty())
         {
           throw std::runtime_error {

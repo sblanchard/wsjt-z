@@ -27,11 +27,13 @@ namespace
 
   enum class Mode
   {
-    Headless,                 // no SmartSDR client connected
-    SmartSdr,                 // SmartSDR-Win connected, client_id present
-    SmartSdrWithoutClientId,  // SmartSDR-Win connected, client_id missing
-    SmartSdrSharedPan         // as SmartSdr, but the new slice lands on
-                              // SmartSDR's existing panadapter
+    Headless,                 // no GUI client connected
+    SmartSdr,                 // GUI client connected, client_id present
+    SmartSdrWithoutClientId,  // client line present, client_id missing
+    SmartSdrSharedPan,        // as SmartSdr, but the new slice lands on
+                              // the GUI client's existing panadapter
+    OtherGuiClient            // GUI client with a program name this fork
+                              // has never heard of, client_id present
   };
 
   // Minimal scripted SmartSDR TCP API endpoint on loopback.
@@ -88,6 +90,20 @@ namespace
     QStringList const& commands () const { return commands_; }
 
   private:
+    // The modes in which the transceiver is expected to take the
+    // coexistence path, i.e. those whose "sub client all" reply names a
+    // GUI client with a non-empty client_id.
+    //
+    // SmartSdrWithoutClientId is deliberately NOT one of them: a client
+    // line without a client_id is not a GUI client, so that mode must
+    // answer like a radio nobody owns.
+    bool coexisting () const
+    {
+      return Mode::SmartSdr == mode_
+        || Mode::SmartSdrSharedPan == mode_
+        || Mode::OtherGuiClient == mode_;
+    }
+
     void on_line (QTcpSocket * client, QByteArray const& line)
     {
       if (!line.startsWith ('C')) return;
@@ -112,7 +128,13 @@ namespace
             {
               status += prefix + "client " + SmartSdrHandle
                 + " connected client_id=" + SmartSdrClientId
-                + " program=SmartSDR-Win station=BENCH local_ptt=1\r\n";
+                + " program=SmartSDR-Mac station=BENCH local_ptt=1\r\n";
+            }
+          else if (Mode::OtherGuiClient == mode_)
+            {
+              status += prefix + "client " + SmartSdrHandle
+                + " connected client_id=" + SmartSdrClientId
+                + " program=AetherSDR station=BENCH local_ptt=1\r\n";
             }
           else if (Mode::SmartSdrWithoutClientId == mode_)
             {
@@ -122,23 +144,23 @@ namespace
         }
       else if (cmd == "sub slice all")
         {
-          if (Mode::Headless != mode_)
+          if (coexisting ())
             {
-              // SmartSDR's own slice, currently the TX slice, on 40 m.
+              // The GUI client's own slice, currently the TX slice, on 40 m.
               status += prefix + "slice 0 in_use=1 client_handle=" + SmartSdrHandle
                 + " tx=1 pan=0x40000000 RF_frequency=7.074000 mode=USB\r\n";
             }
         }
       else if (cmd == "slice create mode=digu")
         {
-          if (Mode::Headless == mode_)
+          if (!coexisting ())
             {
               status += prefix + "slice 0 in_use=1 client_handle=" + ours
                 + " tx=0 pan=0x40000000 RF_frequency=14.074000 mode=DIGU\r\n";
             }
           else
             {
-              // The radio hands the new slice to SmartSDR's GUI handle.
+              // The radio hands the new slice to the GUI client's handle.
               //
               // With both panadapters already in use the radio has none
               // left to create, so it attaches the new slice to the one
@@ -387,7 +409,10 @@ private slots:
               qPrintable (s.join (" / ")));
   }
 
-  void coexistence_without_client_id_fails_closed ()
+  // A connected client line with no client_id describes an API client,
+  // not a GUI one: nobody owns the radio's front panel, so the headless
+  // path is the right one and the start must succeed.
+  void client_line_without_client_id_is_not_a_gui_client ()
   {
     FakeRadio radio {Mode::SmartSdrWithoutClientId};
     select_radio (radio.port ());
@@ -396,14 +421,34 @@ private slots:
     rig.start ();
 
     QTRY_VERIFY_WITH_TIMEOUT (rig.resolution ().count () + rig.failure ().count () > 0, 15000);
-    QVERIFY (rig.resolution ().isEmpty ());
-    QVERIFY2 (failure_text (rig.failure ()).contains ("no SmartSDR client_id"),
-              qPrintable (failure_text (rig.failure ())));
+    QVERIFY2 (rig.failure ().isEmpty (), qPrintable (failure_text (rig.failure ())));
+    QCOMPARE (rig.resolution ().count (), 1);
 
     auto const& c = radio.commands ();
+    QVERIFY (index_of (c, "client gui") > index_of (c, "sub client all"));
+    QVERIFY2 (!c.filter (QRegularExpression {"^client bind"}).size (),
+              qPrintable (c.join (" / ")));
+  }
+
+  // Any GUI client counts, whatever it calls itself: the discriminator
+  // is the client_id the radio reports for "client gui" registrations.
+  void gui_client_with_unknown_program_triggers_coexistence ()
+  {
+    FakeRadio radio {Mode::OtherGuiClient};
+    select_radio (radio.port ());
+
+    Rig rig;
+    rig.start ();
+
+    QTRY_VERIFY_WITH_TIMEOUT (rig.resolution ().count () + rig.failure ().count () > 0, 15000);
+    QVERIFY2 (rig.failure ().isEmpty (), qPrintable (failure_text (rig.failure ())));
+
+    auto const& c = radio.commands ();
+
+    QVERIFY2 (index_of (c, QString {"client bind client_id=%1"}.arg (SmartSdrClientId))
+              > index_of (c, "sub client all"),
+              qPrintable (c.join (" / ")));
     QVERIFY (!c.contains ("client gui"));
-    QVERIFY (!c.filter (QRegularExpression {"^client bind"}).size ());
-    QVERIFY (!c.contains ("slice create mode=digu"));
   }
 };
 

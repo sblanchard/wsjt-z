@@ -89,6 +89,7 @@ private slots:
   void start_fails_on_bad_address ();
   void routes_a_slice_into_the_dax_channel ();
   void does_not_route_when_smartsdr_gui_is_connected ();
+  void client_line_without_client_id_does_not_suppress_routing ();
   void leaves_existing_dax_routing_alone ();
   void reasserts_routing_while_the_stream_is_unbound ();
 
@@ -109,8 +110,13 @@ private:
   bool           streamUnbound_ {false};
 
   // When true the fake radio answers "sub client all" with a connected
-  // SmartSDR GUI client, i.e. another operator owns the radio.
+  // GUI client, i.e. another operator owns the radio.
   bool           announceSmartSdrClient_ {false};
+
+  // When true the fake radio answers "sub client all" with a connected
+  // client that carries no client_id, i.e. an API client - nobody owns
+  // the radio's front panel.
+  bool           announceClientWithoutClientId_ {false};
 
   int sliceDaxCommandCount (int slice, int channel) const;
 
@@ -196,6 +202,15 @@ void TestFlexVitaReceiver::init ()
                       QByteArray::number (FakeClientHandle, 16) +
                       "|client 0x1AB2C3D4 connected"
                       " client_id=8ED2C0A5-2D50-4B33-9A5C-2E1F8F6D0C11"
+                      " program=AetherSDR station=BENCH local_ptt=1\n");
+                }
+
+              if (announceClientWithoutClientId_
+                  && line.contains ("sub client all"))
+                {
+                  client_->write ("S" +
+                      QByteArray::number (FakeClientHandle, 16) +
+                      "|client 0x1AB2C3D4 connected"
                       " program=SmartSDR-Win station=BENCH local_ptt=1\n");
                 }
 
@@ -247,6 +262,7 @@ void TestFlexVitaReceiver::cleanup ()
   streamUnbound_   = false;
 
   announceSmartSdrClient_ = false;
+  announceClientWithoutClientId_ = false;
 }
 
 bool TestFlexVitaReceiver::waitForStreaming (FlexVitaReceiver& receiver, int timeoutMs)
@@ -536,11 +552,13 @@ void TestFlexVitaReceiver::routes_a_slice_into_the_dax_channel ()
 }
 
 //
-// Same unrouted radio as above, but a SmartSDR GUI client owns it. The
-// receiver starts before the Native FLEX CAT backend, so the only
-// in-use slice it can see here is the other operator's - the fallback
-// must stay silent and leave the routing to the transceiver, which
-// names its own slice explicitly.
+// Same unrouted radio as above, but a GUI client owns it - one whose
+// program name this fork has never heard of, because the match is on
+// the client_id the radio reports for GUI registrations, not on the
+// program. The receiver starts before the Native FLEX CAT backend, so
+// the only in-use slice it can see here is the other operator's - the
+// fallback must stay silent and leave the routing to the transceiver,
+// which names its own slice explicitly.
 //
 void TestFlexVitaReceiver::does_not_route_when_smartsdr_gui_is_connected ()
 {
@@ -566,6 +584,45 @@ void TestFlexVitaReceiver::does_not_route_when_smartsdr_gui_is_connected ()
     QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
 
   QVERIFY2 (!sentAnySliceCommand (),
+            qPrintable ("commands seen: " +
+                        QString::fromLatin1 (commands_.join (" / "))));
+
+  receiver.stop ();
+}
+
+//
+// A connected client line with no client_id is an API client, not a GUI
+// one - this fork's own CAT and safety-monitor connections look exactly
+// like that. Nobody owns the front panel, so the fallback must still
+// route the in-use slice into the DAX channel.
+//
+void TestFlexVitaReceiver::client_line_without_client_id_does_not_suppress_routing ()
+{
+  announceSlice_   = true;
+  sliceDaxChannel_ = 0;
+
+  announceClientWithoutClientId_ = true;
+
+  FlexVitaReceiver receiver;
+
+  FlexVitaReceiver::Configuration const configuration =
+      makeConfiguration (server_->serverPort ());
+
+  QVERIFY2 (receiver.start (configuration),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QVERIFY2 (waitForStreaming (receiver),
+            qPrintable (QString::fromStdString (receiver.lastError ())));
+
+  QDeadlineTimer deadline {3000};
+
+  while (!deadline.hasExpired ()
+         && !sentSliceDaxCommand (0, FakeDaxChannel))
+    {
+      QCoreApplication::processEvents (QEventLoop::AllEvents, 20);
+    }
+
+  QVERIFY2 (sentSliceDaxCommand (0, FakeDaxChannel),
             qPrintable ("commands seen: " +
                         QString::fromLatin1 (commands_.join (" / "))));
 

@@ -574,11 +574,11 @@ struct FlexVitaReceiver::Impl
   void ensureDaxRouting(SOCKET tcp)
   {
     //
-    // With a SmartSDR GUI client on the radio this fallback must stay
+    // With a GUI client on the radio this fallback must stay
     // silent.
     //
     // The receiver starts before the Native FLEX CAT backend, so the
-    // first in-use slice it sees is the SmartSDR operator's, not
+    // first in-use slice it sees is the GUI operator's, not
     // WSJT's - re-routing it would steal the other operator's audio
     // path. In coexistence the transceiver's explicit
     // "slice s <its own slice> dax=<channel>" is the only routing
@@ -684,12 +684,22 @@ struct FlexVitaReceiver::Impl
     //
     //   S1A2B3C4|client 0x1AB2C3D4 connected client_id=... program=SmartSDR-Win ...
     //
-    // Only a flag is wanted here: is somebody else's SmartSDR GUI
-    // driving this radio? The match on "program=SmartSDR" is a
-    // deliberate prefix, broader than the transceiver's
-    // "program=SmartSDR-Win" mode decision: whichever SmartSDR
-    // flavour is present, the fallback routing below must never
-    // re-route a slice this fork does not own.
+    // Only a flag is wanted here: is a GUI client driving this radio?
+    //
+    // DEVIATION from W7PP: the discriminator is a non-empty
+    // "client_id=" on a connected client line, not the program name -
+    // the same rule the transceiver's mode decision uses. The radio
+    // reports a client_id only for clients that registered with
+    // "client gui", so whichever GUI flavour is present (SmartSDR for
+    // Windows or Mac, AetherSDR, ...) the fallback routing below
+    // stays silent, while API-only clients - this fork's own CAT and
+    // RX-bridge connections included - do not trip it.
+    //
+    // In headless mode this app's own "client gui" registration also
+    // produces such a line and so disables the fallback: that is
+    // fine, because the transceiver routes its own slice explicitly
+    // right after registering, and this fallback existed only for the
+    // window before any GUI client exists.
     //
     // Never cleared: a GUI client that disconnects mid-session leaves
     // the transceiver's own explicit routing in place, so there is
@@ -699,7 +709,7 @@ struct FlexVitaReceiver::Impl
     if ('S' == line.front()
         && std::string::npos != line.find("|client ")
         && std::string::npos != line.find(" connected")
-        && std::string::npos != line.find("program=SmartSDR"))
+        && !extractValue(line, "client_id=").empty())
       {
         smartSdrGuiPresent.store(true);
       }
