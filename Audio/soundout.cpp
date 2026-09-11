@@ -1,11 +1,13 @@
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
+
 #include "soundout.h"
-#include <QFile>
 #include <QUdpSocket>
 #include <QHostAddress>
 #include <cstring>
 
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QThread>
 #include <QTimer>
 #include <QVariant>
 #include <QAudioDeviceInfo>
@@ -52,8 +54,6 @@ bool SoundOutput::checkStream () const
   return result;
 }
 
-static QFile w7pp_native_flex_vita_dump_file;
-
 void SoundOutput::setFormat (QAudioDeviceInfo const& device, unsigned channels, int frames_buffered)
 {
   Q_ASSERT (0 < channels && channels < 3);
@@ -98,8 +98,8 @@ void SoundOutput::restart (QIODevice * source)
       // AudioDevice::load () puts the sample in the *second* slot for
       // Channel::Right -- so a Right output-channel selection would
       // silently transmit an unmodulated carrier with no error and no
-      // warning. Refuse to start instead, mirroring the mono-only check
-      // guarding the offline VITA dump path further below.
+      // warning. Refuse to start instead, since the Native FLEX
+      // packetiser is mono qint16 only.
       if (AudioDevice::Right == audio_source->channel ())
         {
           Q_EMIT error (
@@ -130,25 +130,74 @@ void SoundOutput::restart (QIODevice * source)
       m_native_flex_tx_radio_address.clear ();
       m_native_flex_tx_stream_id = 0;
 
+      /*
+       * W7PP:
+       *
+       * Native FLEX route handoff.
+       *
+       * QCoreApplication belongs to the GUI/main thread.
+       * SoundOutput may run on another thread, so read the
+       * dynamically published radio address and DAX-TX stream
+       * ID on the application's owning thread.
+       *
+       * This changes route/state handoff only.
+       * Native VITA audio and packet construction are untouched.
+       */
       if (QCoreApplication::instance ())
         {
-          QString const tx_radio_address =
-              QCoreApplication::instance ()
-                  ->property (
-                      "W7PPNativeFlexTxRadioAddress")
-                  .toString ()
-                  .trimmed ();
+          QString tx_radio_address;
+          qulonglong tx_stream_id {0};
 
-          bool stream_ok {false};
+          auto read_native_flex_tx_route =
+              [&tx_radio_address, &tx_stream_id] ()
+              {
+                auto * app =
+                    QCoreApplication::instance ();
 
-          qulonglong const tx_stream_id =
-              QCoreApplication::instance ()
-                  ->property (
-                      "W7PPNativeFlexTxStreamId")
-                  .toULongLong (&stream_ok);
+                if (!app)
+                  {
+                    return;
+                  }
 
-          if (!tx_radio_address.isEmpty ()
-              && stream_ok
+                tx_radio_address =
+                    app->property (
+                        "W7PPNativeFlexTxRadioAddress")
+                        .toString ();
+
+                bool stream_ok {false};
+
+                qulonglong const published_stream_id =
+                    app->property (
+                        "W7PPNativeFlexTxStreamId")
+                        .toULongLong (&stream_ok);
+
+                if (stream_ok)
+                  {
+                    tx_stream_id =
+                        published_stream_id;
+                  }
+              };
+
+          auto * app =
+              QCoreApplication::instance ();
+
+          bool route_read_ok {true};
+
+          if (app->thread () == QThread::currentThread ())
+            {
+              read_native_flex_tx_route ();
+            }
+          else
+            {
+              route_read_ok =
+                  QMetaObject::invokeMethod (
+                      app,
+                      read_native_flex_tx_route,
+                      Qt::BlockingQueuedConnection);
+            }
+
+          if (route_read_ok
+              && !tx_radio_address.isEmpty ()
               && tx_stream_id > 0
               && tx_stream_id <= 0xffffffffULL)
             {
@@ -180,61 +229,6 @@ void SoundOutput::restart (QIODevice * source)
       // stream.  This value is only for offline comparison.
       m_native_flex_vita_dump_stream_id = 0x84000000u;
 
-      QByteArray const vita_dump_name =
-          qgetenv ("W7PP_NATIVE_FLEX_TX_VITA_DUMP_FILE");
-
-      QByteArray const vita_stream_text =
-          qgetenv ("W7PP_NATIVE_FLEX_TX_VITA_DUMP_STREAM_ID");
-
-      if (!vita_stream_text.isEmpty ())
-        {
-          bool stream_ok {false};
-
-          quint32 const stream_id =
-              vita_stream_text.toUInt (
-                  &stream_ok,
-                  0);
-
-          if (!stream_ok || stream_id == 0)
-            {
-              Q_EMIT error (
-                  tr ("Invalid Native FLEX offline VITA stream ID."));
-
-              m_native_flex_source = nullptr;
-              return;
-            }
-
-          m_native_flex_vita_dump_stream_id =
-              stream_id;
-        }
-
-      if (!vita_dump_name.isEmpty ())
-        {
-          if (m_native_flex_bytes_per_frame
-              != static_cast<qint64> (sizeof (qint16)))
-            {
-              Q_EMIT error (
-                  tr ("Native FLEX offline VITA dump requires mono qint16 input."));
-
-              m_native_flex_source = nullptr;
-              return;
-            }
-
-          w7pp_native_flex_vita_dump_file.setFileName (
-              QString::fromLocal8Bit (
-                  vita_dump_name));
-
-          if (!w7pp_native_flex_vita_dump_file.open (
-                  QIODevice::WriteOnly
-                  | QIODevice::Truncate))
-            {
-              Q_EMIT error (
-                  tr ("Cannot open Native FLEX offline VITA dump file."));
-
-              m_native_flex_source = nullptr;
-              return;
-            }
-        }
       // 10 ms at 48 kHz = 480 frames.
       m_native_flex_buffer.resize (
           static_cast<int> (480 * m_native_flex_bytes_per_frame));
@@ -524,21 +518,6 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
     }
 
   /*
-   * Optional offline reference capture.
-   */
-  if (w7pp_native_flex_vita_dump_file.isOpen ())
-    {
-      if (w7pp_native_flex_vita_dump_file.write (packet)
-          != packet.size ())
-        {
-          Q_EMIT error (
-              tr ("Native FLEX offline VITA packet dump write failed."));
-
-          w7pp_native_flex_vita_dump_file.close ();
-        }
-    }
-
-  /*
    * Native FLEX live queue.
    *
    * No UDP transmission occurs here.
@@ -649,29 +628,6 @@ void SoundOutput::nativeFlexWriteVitaPacket ()
 }
 void SoundOutput::nativeFlexCloseVitaDump ()
 {
-  if (!w7pp_native_flex_vita_dump_file.isOpen ())
-    {
-      m_native_flex_vita_payload.clear ();
-      return;
-    }
-
-  if (!m_native_flex_vita_payload.isEmpty ())
-    {
-      int const missing =
-          256 - m_native_flex_vita_payload.size ();
-
-      if (missing > 0)
-        {
-          m_native_flex_vita_payload.append (
-              QByteArray (missing, '\0'));
-        }
-
-      nativeFlexWriteVitaPacket ();
-    }
-
-  w7pp_native_flex_vita_dump_file.flush ();
-  w7pp_native_flex_vita_dump_file.close ();
-
   m_native_flex_vita_payload.clear ();
 }
 void SoundOutput::nativeFlexTxPace ()
@@ -859,9 +815,8 @@ void SoundOutput::nativeFlexPump ()
   // Match the stock SoundOutput Pwr behavior by applying
   // the existing m_volume attenuation before packetization.
   if (received > 0
-      && (w7pp_native_flex_vita_dump_file.isOpen ()
-          || (!m_native_flex_tx_radio_address.isEmpty ()
-              && m_native_flex_tx_stream_id != 0)))
+      && !m_native_flex_tx_radio_address.isEmpty ()
+      && m_native_flex_tx_stream_id != 0)
     {
       qint64 const frames =
           received / m_native_flex_bytes_per_frame;

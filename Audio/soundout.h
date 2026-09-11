@@ -1,3 +1,5 @@
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
+
 // -*- Mode: C++ -*-
 #ifndef SOUNDOUT_H__
 #define SOUNDOUT_H__
