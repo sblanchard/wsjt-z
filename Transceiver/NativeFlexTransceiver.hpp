@@ -94,9 +94,23 @@ private:
   QString smart_sdr_client_id_ {};
   int cached_tx_rf_power_level_ {-1};
   bool smart_sdr_present_ {false};
+
+  /*
+   * Open only around the "sub client all" dump in do_start(), so the
+   * coexistence decision is made once and never revisited.
+   */
+  bool collecting_clients_ {false};
   bool collecting_existing_slices_ {false};
   bool creating_slice_ {false};
   QSet<int> existing_slice_ids_ {};
+
+  /*
+   * Panadapters that already existed when the coexistence snapshot
+   * was taken. do_stop() must never remove one of these: the radio
+   * may attach WSJT's new slice to a pan SmartSDR was already
+   * displaying.
+   */
+  QSet<quint32> existing_panadapter_ids_ {};
 
   quint32 next_sequence_ {1};
   int slice_id_ {-1};

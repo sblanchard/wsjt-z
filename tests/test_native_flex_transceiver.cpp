@@ -29,7 +29,9 @@ namespace
   {
     Headless,                 // no SmartSDR client connected
     SmartSdr,                 // SmartSDR-Win connected, client_id present
-    SmartSdrWithoutClientId   // SmartSDR-Win connected, client_id missing
+    SmartSdrWithoutClientId,  // SmartSDR-Win connected, client_id missing
+    SmartSdrSharedPan         // as SmartSdr, but the new slice lands on
+                              // SmartSDR's existing panadapter
   };
 
   // Minimal scripted SmartSDR TCP API endpoint on loopback.
@@ -37,6 +39,10 @@ namespace
   // Records every command text it receives, in order, across all
   // connections. Status lines that the real radio would push are
   // written before the R response of the command that triggers them.
+  // That is deliberately the easy ordering: the transceiver's
+  // drain_control_lines () windows exist for the opposite one, where
+  // the radio trails its status lines after the R response, so this
+  // fake does not exercise them.
   class FakeRadio final : public QObject
   {
     Q_OBJECT
@@ -102,7 +108,7 @@ namespace
 
       if (cmd == "sub client all")
         {
-          if (Mode::SmartSdr == mode_)
+          if (Mode::SmartSdr == mode_ || Mode::SmartSdrSharedPan == mode_)
             {
               status += prefix + "client " + SmartSdrHandle
                 + " connected client_id=" + SmartSdrClientId
@@ -133,8 +139,15 @@ namespace
           else
             {
               // The radio hands the new slice to SmartSDR's GUI handle.
+              //
+              // With both panadapters already in use the radio has none
+              // left to create, so it attaches the new slice to the one
+              // SmartSDR is already displaying.
+              char const * const pan =
+                Mode::SmartSdrSharedPan == mode_ ? "0x40000000" : "0x40000001";
+
               status += prefix + "slice 1 in_use=1 client_handle=" + SmartSdrHandle
-                + " tx=0 pan=0x40000001 RF_frequency=14.074000 mode=DIGU\r\n";
+                + " tx=0 pan=" + pan + " RF_frequency=14.074000 mode=DIGU\r\n";
             }
         }
       else if (cmd == "stream create type=dax_tx")
@@ -332,12 +345,46 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT (rig.finished ().count () > 0, 15000);
 
     auto const& s = radio.commands ();
-    QVERIFY (index_of (s, "stream remove 0x84000001") > index_of (s, "xmit 0"));
+
+    // "xmit" is radio-global, so coexistence must not unkey a session
+    // that never keyed: that would drop the SmartSDR operator's carrier.
+    QVERIFY (!s.contains ("xmit 0"));
+
+    // Teardown order, anchored on the last startup command instead.
+    QVERIFY (index_of (s, "stream remove 0x84000001")
+             > index_of (s, "stream set 0x84000001 tx=1"));
     QVERIFY (index_of (s, "slice r 1") > index_of (s, "stream remove 0x84000001"));
 
     // SmartSDR's TX slice is restored and the extra panadapter removed.
     QVERIFY (index_of (s, "slice s 0 tx=1") > index_of (s, "slice r 1"));
     QVERIFY (index_of (s, "display pan remove 0x40000001") > index_of (s, "slice s 0 tx=1"));
+  }
+
+  // A 2-slice/2-pan radio with SmartSDR holding both panadapters has
+  // none left to create, so WSJT's new slice lands on SmartSDR's.
+  // Removing it at shutdown would delete the other operator's display.
+  void coexistence_keeps_a_panadapter_that_predates_our_slice ()
+  {
+    FakeRadio radio {Mode::SmartSdrSharedPan};
+    select_radio (radio.port ());
+
+    Rig rig;
+    rig.start ();
+
+    QTRY_VERIFY_WITH_TIMEOUT (rig.resolution ().count () + rig.failure ().count () > 0, 15000);
+    QVERIFY2 (rig.failure ().isEmpty (), qPrintable (failure_text (rig.failure ())));
+
+    rig.stop ();
+    QTRY_VERIFY_WITH_TIMEOUT (rig.finished ().count () > 0, 15000);
+
+    auto const& s = radio.commands ();
+
+    // WSJT's own slice still goes.
+    QVERIFY (s.contains ("slice r 1"));
+
+    // SmartSDR's panadapter stays.
+    QVERIFY2 (!s.filter (QRegularExpression {"^display pan remove"}).size (),
+              qPrintable (s.join (" / ")));
   }
 
   void coexistence_without_client_id_fails_closed ()

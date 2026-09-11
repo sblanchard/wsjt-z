@@ -27,19 +27,26 @@ namespace
    *
    * DEVIATION from W7PP: one helper for the three call sites (the
    * donor publishes on the application thread after connect but
-   * still clears the route directly), and the caller chooses
-   * whether to block. do_stop() must not block on the main thread:
-   * during application shutdown the main thread is waiting on the
-   * transceiver thread, and a BlockingQueuedConnection there would
-   * deadlock. A queued clear that never runs because the
-   * application is gone is harmless.
+   * still clears the route directly), and it never blocks.
+   *
+   * A BlockingQueuedConnection here deadlocks on exit: Configuration
+   * tears the rig down with transceiver_thread_->quit() + wait() while
+   * the main event loop is already stopped, so a publish landing in
+   * that window has the main thread waiting on the transceiver thread
+   * and the transceiver thread waiting on the main thread.
+   *
+   * A plain queued publish is sufficient. The route only has to be
+   * visible before the audio side may transmit, and TX cannot begin
+   * until the resolution/update signals reach the main thread - those
+   * are posted to the same main-thread event queue AFTER this publish
+   * event, so FIFO delivery guarantees the ordering. A queued clear
+   * that never runs because the application is gone is harmless.
    *
    * No stream number is hard-coded here.
    */
   void publish_native_flex_tx_route(
       QString const& radio_address,
-      quint32 stream_id,
-      bool blocking)
+      quint32 stream_id)
   {
     auto * app = QCoreApplication::instance();
 
@@ -76,20 +83,69 @@ namespace
         return;
       }
 
-    bool const published =
-        QMetaObject::invokeMethod(
-            app,
-            publish,
-            blocking
-                ? Qt::BlockingQueuedConnection
-                : Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        app,
+        publish,
+        Qt::QueuedConnection);
+  }
 
-    if (blocking && !published)
+  /*
+   * Read the "pan=0x...." field of a FLEX slice status line.
+   *
+   * Shared by the two places that need it so the pre-existing
+   * panadapter snapshot and the owned-slice capture cannot drift
+   * apart in how they parse the same field.
+   */
+  bool parse_panadapter_id(
+      QByteArray const& line,
+      quint32 & panadapter_id)
+  {
+    QByteArray const pan_marker {
+        "pan=0x"
+    };
+
+    int const pan_marker_pos =
+        line.indexOf(pan_marker);
+
+    if (pan_marker_pos < 0)
       {
-        throw std::runtime_error {
-            "Native FLEX TX route publication failed."
-        };
+        return false;
       }
+
+    int const pan_start =
+        pan_marker_pos
+        + pan_marker.size();
+
+    int pan_end =
+        line.indexOf(
+            ' ',
+            pan_start);
+
+    if (pan_end < 0)
+      {
+        pan_end =
+            line.size();
+      }
+
+    bool pan_ok = false;
+
+    quint32 const pan =
+        QString::fromLatin1(
+            line.mid(
+                pan_start,
+                pan_end - pan_start))
+            .toUInt(
+                &pan_ok,
+                16);
+
+    if (!pan_ok)
+      {
+        return false;
+      }
+
+    panadapter_id = pan;
+
+    return true;
   }
 }
 
@@ -241,7 +297,23 @@ void NativeFlexTransceiver::capture_smart_sdr_client(
    * Read-only detection of an already-connected SmartSDR GUI client.
    *
    * This helper changes no radio state and does not bind clients.
+   *
+   * DEVIATION from W7PP: latch the decision to the mode-decision
+   * window only.
+   *
+   * The donor runs this on every status line for the life of the
+   * session, so a SmartSDR-Win started AFTER a headless WSJT-Z flips
+   * smart_sdr_present_ mid-session. Everything downstream then
+   * switches path against a session that already took the headless
+   * route: do_ptt() starts writing "slice s <n> tx=1 mode=digu" and
+   * do_stop() starts restoring a previous_tx_slice_id_ that was never
+   * captured. The mode is decided once, around "sub client all".
    */
+  if (!collecting_clients_)
+    {
+      return;
+    }
+
   if (
       line.startsWith('S')
       && line.contains("|client ")
@@ -364,6 +436,26 @@ void NativeFlexTransceiver::capture_owned_slice(
               status_slice);
 
           /*
+           * DEVIATION from W7PP: snapshot the panadapters too.
+           *
+           * do_stop() removes whatever pan the new slice reported. On
+           * a radio whose panadapters are all already in use - two
+           * slices and two pans, both SmartSDR's - FLEX may attach
+           * WSJT's new slice to an EXISTING pan rather than create
+           * one, and the donor's cleanup then deletes the SmartSDR
+           * operator's display. Anything seen here predates WSJT's
+           * slice, so it is never ours to remove.
+           */
+          {
+            quint32 pan = 0;
+
+            if (parse_panadapter_id(line, pan))
+              {
+                existing_panadapter_ids_.insert(pan);
+              }
+          }
+
+          /*
            * DEVIATION from W7PP: match " tx=1" with its leading
            * space.
            *
@@ -454,47 +546,15 @@ void NativeFlexTransceiver::capture_owned_slice(
    * attached to W7PP's exact newly-created slice so shutdown
    * can remove the extra SmartSDR display cleanly.
    */
-  QByteArray const pan_marker {
-      "pan=0x"
-  };
+  {
+    quint32 pan = 0;
 
-  int const pan_marker_pos =
-      line.indexOf(pan_marker);
-
-  if (pan_marker_pos >= 0)
-    {
-      int const pan_start =
-          pan_marker_pos
-          + pan_marker.size();
-
-      int pan_end =
-          line.indexOf(
-              ' ',
-              pan_start);
-
-      if (pan_end < 0)
-        {
-          pan_end =
-              line.size();
-        }
-
-      bool pan_ok = false;
-
-      quint32 const pan =
-          QString::fromLatin1(
-              line.mid(
-                  pan_start,
-                  pan_end - pan_start))
-              .toUInt(
-                  &pan_ok,
-                  16);
-
-      if (pan_ok)
-        {
-          slice_panadapter_id_ =
-              pan;
-        }
-    }
+    if (parse_panadapter_id(line, pan))
+      {
+        slice_panadapter_id_ =
+            pan;
+      }
+  }
   /*
    * TransceiverBase::startup() does not automatically call
    * do_frequency() after do_start().
@@ -1410,7 +1470,7 @@ int NativeFlexTransceiver::do_start()
    * Native FLEX only.
    * Clear any stale TX route before establishing this session.
    */
-  publish_native_flex_tx_route(QString {}, 0, false);
+  publish_native_flex_tx_route(QString {}, 0);
   /*
    * 
    *
@@ -1438,9 +1498,11 @@ int NativeFlexTransceiver::do_start()
   smart_sdr_client_id_.clear();
   cached_tx_rf_power_level_ = -1;
   smart_sdr_present_ = false;
+  collecting_clients_ = false;
   collecting_existing_slices_ = false;
   creating_slice_ = false;
   existing_slice_ids_.clear();
+  existing_panadapter_ids_.clear();
 
   client_handle_ = 0;
   have_client_handle_ = false;
@@ -1625,21 +1687,35 @@ int NativeFlexTransceiver::do_start()
    * If SmartSDR-Win is absent, preserve the accepted headless
    * client-gui ownership path.
    */
-  send_command(
-      QString {
-          "sub client all"
-      });
+  collecting_clients_ = true;
 
-  /*
-   * DEVIATION from W7PP: let the client dump arrive before deciding.
-   *
-   * The donor reads smart_sdr_present_ the instant send_command()
-   * returns, i.e. on the "R<seq>|" line. If the radio trails its
-   * client status lines after that response, SmartSDR goes undetected
-   * and the headless "client gui" path runs against a radio that has
-   * SmartSDR up. Drain first (see drain_control_lines()).
-   */
-  drain_control_lines(750);
+  try
+    {
+      send_command(
+          QString {
+              "sub client all"
+          });
+
+      /*
+       * DEVIATION from W7PP: let the client dump arrive before
+       * deciding.
+       *
+       * The donor reads smart_sdr_present_ the instant send_command()
+       * returns, i.e. on the "R<seq>|" line. If the radio trails its
+       * client status lines after that response, SmartSDR goes
+       * undetected and the headless "client gui" path runs against a
+       * radio that has SmartSDR up. Drain first (see
+       * drain_control_lines()).
+       */
+      drain_control_lines(750);
+    }
+  catch (...)
+    {
+      collecting_clients_ = false;
+      throw;
+    }
+
+  collecting_clients_ = false;
 
   if (smart_sdr_present_)
     {
@@ -1880,7 +1956,7 @@ int NativeFlexTransceiver::do_start()
    *
    * No UDP socket or packet transmission is created here.
    */
-  publish_native_flex_tx_route(radio.address, dax_tx_stream_id_, true);
+  publish_native_flex_tx_route(radio.address, dax_tx_stream_id_);
 
   /*
    * W7PP :
@@ -1936,11 +2012,24 @@ void NativeFlexTransceiver::do_stop()
    *
    * Best-effort radio unkey before control-socket teardown.
    * Safety telemetry is then stopped independently.
+   *
+   * DEVIATION from W7PP: in coexistence, unkey only if WSJT is the
+   * one keyed.
+   *
+   * "xmit" is radio-global, not per-client: a bound client's "xmit 0"
+   * cuts whatever the SmartSDR operator is transmitting. The donor's
+   * unconditional form therefore drops the other operator's carrier
+   * every time WSJT-Z exits, restarts the rig, or fails a start after
+   * "client bind". state().ptt() is set true only by the key-up path
+   * in do_ptt(), so it marks the shutdowns that have something of our
+   * own to unkey. Headless is unchanged: there nobody else can be on
+   * the air, and the unconditional unkey is the safer default.
    */
   if (
       control_socket_
       && QAbstractSocket::ConnectedState
-          == control_socket_->state())
+          == control_socket_->state()
+      && (!smart_sdr_present_ || state().ptt()))
     {
       try
         {
@@ -1992,7 +2081,7 @@ void NativeFlexTransceiver::do_stop()
    *
    * This Native FLEX session no longer owns a TX route.
    */
-  publish_native_flex_tx_route(QString {}, 0, false);
+  publish_native_flex_tx_route(QString {}, 0);
   /*
    * Remove the slice created and owned by this WSJT session.
    */
@@ -2055,10 +2144,18 @@ void NativeFlexTransceiver::do_stop()
    * SmartSDR can retain the extra panadapter after W7PP's
    * coexistence slice is removed.  Remove only the panadapter
    * captured from W7PP's exact slice.
+   *
+   * DEVIATION from W7PP: never remove a panadapter that already
+   * existed when the slice snapshot was taken. FLEX can attach the
+   * new coexistence slice to a pre-existing pan instead of creating
+   * one - on a 2-slice/2-pan radio with SmartSDR holding both, it
+   * must - and removing that one deletes the SmartSDR operator's
+   * display.
    */
   if (
       smart_sdr_present_
       && slice_panadapter_id_ != 0
+      && !existing_panadapter_ids_.contains(slice_panadapter_id_)
       && control_socket_
       && QAbstractSocket::ConnectedState
           == control_socket_->state())
@@ -2107,9 +2204,11 @@ void NativeFlexTransceiver::do_stop()
   smart_sdr_client_id_.clear();
   cached_tx_rf_power_level_ = -1;
   smart_sdr_present_ = false;
+  collecting_clients_ = false;
   collecting_existing_slices_ = false;
   creating_slice_ = false;
   existing_slice_ids_.clear();
+  existing_panadapter_ids_.clear();
 
   client_handle_ = 0;
   have_client_handle_ = false;
@@ -2367,18 +2466,32 @@ void NativeFlexTransceiver::do_ptt(bool on)
    *
    * If the radio acknowledgement fails, local PTT is
    * still cleared before the failure is propagated.
+   *
+   * DEVIATION from W7PP: in coexistence, unkey only when this un-key
+   * actually follows a key-up - the same conservatism as the TX-slice
+   * restore below.
+   *
+   * "xmit" is radio-global, so a bound client's "xmit 0" cuts whatever
+   * the SmartSDR operator is transmitting. TransceiverBase::shutdown()
+   * calls do_ptt(false) unconditionally whenever the rig is online,
+   * keyed or not, so the donor's unguarded form takes the other
+   * operator off the air on every WSJT-Z exit. A session that never
+   * keyed has nothing of its own to unkey. Headless is unchanged.
    */
-  try
+  if (!smart_sdr_present_ || state().ptt())
     {
-      send_command(
-          QString {
-              "xmit 0"
-          });
-    }
-  catch (...)
-    {
-      update_PTT(false);
-      throw;
+      try
+        {
+          send_command(
+              QString {
+                  "xmit 0"
+              });
+        }
+      catch (...)
+        {
+          update_PTT(false);
+          throw;
+        }
     }
 
   /*
