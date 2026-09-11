@@ -180,9 +180,9 @@ void FlexBandLevels::migrate_legacy_watts (QSettings& settings,
         }
 
       LevelSet& set = bands_[band];
-      if (set.values[RfWatts] < 0)
+      if (set.values[RfPercent] < 0)
         {
-          set.values[RfWatts] = watts;
+          set.values[RfPercent] = watts;
         }
     }
 }

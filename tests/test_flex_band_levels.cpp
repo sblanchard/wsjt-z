@@ -24,9 +24,9 @@ private slots:
   void capture_then_peek_returns_the_value ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
     FlexBandLevels::LevelSet const set = levels.peek ("20m");
-    QCOMPARE (set.values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (set.values[FlexBandLevels::RfPercent], 35);
   }
 
   // peek() is the read-only observer: unlike apply(), it must not arm
@@ -34,31 +34,31 @@ private slots:
   void peek_does_not_arm_guards ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
     levels.peek ("20m");
-    levels.capture ("20m", FlexBandLevels::RfWatts, 70, 1100);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 70, 1100);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 70);
   }
 
   void bands_are_independent ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.capture ("40m", FlexBandLevels::RfWatts, 80, 1000);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
-    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 80);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
+    levels.capture ("40m", FlexBandLevels::RfPercent, 80, 1000);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 35);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfPercent], 80);
   }
 
   void all_four_fields_round_trip_independently ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 42, 1000);
     levels.capture ("20m", FlexBandLevels::DaxRxGain, 55, 1000);
     levels.capture ("20m", FlexBandLevels::DaxTxGain, 61, 1000);
 
     FlexBandLevels::LevelSet const set = levels.peek ("20m");
-    QCOMPARE (set.values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (set.values[FlexBandLevels::RfPercent], 35);
     QCOMPARE (set.values[FlexBandLevels::SliceAfGain], 42);
     QCOMPARE (set.values[FlexBandLevels::DaxRxGain], 55);
     QCOMPARE (set.values[FlexBandLevels::DaxTxGain], 61);
@@ -67,37 +67,37 @@ private slots:
   void arm_guard_guards_the_pushed_field_against_its_own_echo ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
 
     // Pushing to the radio arms the guard for that field, on the value
     // being pushed.
-    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
+    levels.arm_guard (FlexBandLevels::RfPercent, 35, 2000);
 
     // The radio echoes the value straight back: dropped.
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 2100);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 35);
 
     // The echo cleared the guard, so a genuine later change lands.
-    levels.capture ("20m", FlexBandLevels::RfWatts, 70, 2300);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 70, 2300);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 70);
   }
 
   void guard_expires_when_no_echo_arrives ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
+    levels.arm_guard (FlexBandLevels::RfPercent, 35, 2000);
 
     // Nothing echoed. After the 2s timeout, captures land again.
-    levels.capture ("20m", FlexBandLevels::RfWatts, 70, 4100);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 70);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 70, 4100);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 70);
   }
 
   void guard_does_not_block_a_different_field ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
-    levels.arm_guard (FlexBandLevels::RfWatts, 35, 2000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
+    levels.arm_guard (FlexBandLevels::RfPercent, 35, 2000);
 
     levels.capture ("20m", FlexBandLevels::SliceAfGain, 42, 2100);
     QCOMPARE (levels.peek ("20m").values[FlexBandLevels::SliceAfGain], 42);
@@ -165,15 +165,15 @@ private slots:
   {
     FlexBandLevels levels;
     // No arm_guard() call at all for this field.
-    levels.capture ("20m", FlexBandLevels::RfWatts, 35, 2100);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 35);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 35, 2100);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 35);
   }
 
   void negative_captures_are_ignored ()
   {
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, -1, 1000);
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], -1);
+    levels.capture ("20m", FlexBandLevels::RfPercent, -1, 1000);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], -1);
   }
 
   void save_and_load_preserve_all_bands_and_fields ()
@@ -184,7 +184,7 @@ private slots:
 
     {
       FlexBandLevels levels;
-      levels.capture ("20m", FlexBandLevels::RfWatts, 35, 1000);
+      levels.capture ("20m", FlexBandLevels::RfPercent, 35, 1000);
       levels.capture ("20m", FlexBandLevels::DaxTxGain, 61, 1000);
       levels.capture ("40m", FlexBandLevels::SliceAfGain, 42, 1000);
 
@@ -198,7 +198,7 @@ private slots:
     restored.load (settings);
 
     FlexBandLevels::LevelSet const twenty = restored.peek ("20m");
-    QCOMPARE (twenty.values[FlexBandLevels::RfWatts], 35);
+    QCOMPARE (twenty.values[FlexBandLevels::RfPercent], 35);
     QCOMPARE (twenty.values[FlexBandLevels::DaxTxGain], 61);
     // Never captured: still unset after a round trip.
     QCOMPARE (twenty.values[FlexBandLevels::SliceAfGain], -1);
@@ -225,8 +225,8 @@ private slots:
     levels.load (settings);
     levels.migrate_legacy_watts (settings, bands);
 
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 45);
-    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 45);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 45);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfPercent], 45);
   }
 
   void migration_never_overwrites_a_stored_band ()
@@ -239,14 +239,14 @@ private slots:
     settings.setValue (FlexBandLevels::legacy_watts_key (), 45);
 
     FlexBandLevels levels;
-    levels.capture ("20m", FlexBandLevels::RfWatts, 90, 1000);
+    levels.capture ("20m", FlexBandLevels::RfPercent, 90, 1000);
 
     QStringList bands;
     bands << "20m" << "40m";
     levels.migrate_legacy_watts (settings, bands);
 
-    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfWatts], 90);
-    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfWatts], 45);
+    QCOMPARE (levels.peek ("20m").values[FlexBandLevels::RfPercent], 90);
+    QCOMPARE (levels.peek ("40m").values[FlexBandLevels::RfPercent], 45);
   }
 };
 
