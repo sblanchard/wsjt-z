@@ -302,6 +302,9 @@ private slots:
   void on_readFreq_clicked();
   void on_RxFreqSpinBox_valueChanged(int n);
   void on_outAttenuation_valueChanged (int);
+  // W7PP : dedicated Native FLEX RF power control, in SmartSDR rfpower
+  // percent. Auto-connected to w7ppFlexRfPower in mainwindow.ui.
+  void on_w7ppFlexRfPower_valueChanged (int percent);
   void pollFlexBandLevels ();
   void rigOpen ();
   void handle_transceiver_update (Transceiver::TransceiverState const&);
@@ -731,7 +734,6 @@ private:
   int     m_flex_vita_generation {0};
   bool    m_flex_vita_watchdog_armed {false};
   quint64 m_flex_vita_watchdog_packets {0};
-  bool    m_flexOutAttenuationRepurposed {false};  // W7PP : true while outAttenuation is repurposed to Flex RF watts
   bool    inSettings = false;
   bool    m_diskData;
   bool    m_loopall;

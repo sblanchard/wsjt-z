@@ -664,37 +664,11 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   connect (m_soundOutput, &SoundOutput::error, &m_config, &Configuration::invalidate_audio_output_device);
   // connect (m_soundOutput, &SoundOutput::status, this, &MainWindow::showStatusMessage);
   connect (this, &MainWindow::outAttenuationChanged, m_soundOutput, &SoundOutput::setAttenuation);
-  // W7PP : Native FLEX TX audio level is independent
-  // of the RF Watts control. SoundOutput::m_volume is also used
-  // by the Native FLEX VITA PCM packetizer.
-  connect (ui->w7ppFlexTxAudioAttenuation,
-           &QSlider::valueChanged,
-           this,
-           [this] (int value)
-           {
-             if (m_config.rig_name() != "Flex Native VITA-49")
-               {
-                 return;
-               }
-
-             int const bounded = qBound(0, value, 200);
-             qreal const attenuation_db = bounded / 10.0;
-
-             if (ui->w7ppFlexTxAudioAttenuation->hasFocus())
-               {
-                 QString const shown =
-                     bounded
-                     ? QString::number(-attenuation_db, 'f', 1)
-                     : QStringLiteral("0");
-
-                 QToolTip::showText(
-                     QCursor::pos(),
-                     tr("Native FLEX TX audio %1 dB").arg(shown),
-                     ui->w7ppFlexTxAudioAttenuation);
-               }
-
-             Q_EMIT outAttenuationChanged(attenuation_db);
-           });
+  // DEVIATION from W7PP: the donor's separate Native FLEX "TX Audio"
+  // slider is gone. RF power has a dedicated control of its own
+  // (w7ppFlexRfPower), so the stock Pwr slider keeps its stock meaning
+  // -- Tx audio level -- for the Flex exactly as for any other rig,
+  // and a second audio control would only duplicate it.
   // W7PP : Native FLEX RX Gain UI readout and immediate persistence.
   connect (ui->w7ppFlexRxGainSlider, &QSlider::valueChanged,
            this,
@@ -1798,21 +1772,10 @@ void MainWindow::writeSettings()
           QVariant::fromValue(m_freqNominal));
     }
 
-  // W7PP : Native FLEX RF power is not audio attenuation.
-  // Never overwrite the stock OutAttenuation setting with watts.
-  if (m_config.rig_name() == "Flex Native VITA-49")
-    {
-      // W7PP : save Native FLEX TX Audio independently.
-      m_settings->setValue(
-          "W7PPNativeFlexTxAudioAttenuation",
-          ui->w7ppFlexTxAudioAttenuation->value());
-    }
-  else
-    {
-      m_settings->setValue(
-          "OutAttenuation",
-          ui->outAttenuation->value());
-    }
+  m_settings->setValue("OutAttenuation", ui->outAttenuation->value());
+  // The Native FLEX RF power slider is not persisted here: its values
+  // live per band in m_flexBandLevels, saved with the rest of that
+  // store.
   // W7PP : remember Native FLEX RX operator gain setting.
   m_settings->setValue("FlexNativeRxGainDb", ui->w7ppFlexRxGainSlider->value());
   m_settings->setValue("NoSuffix",m_noSuffix);
@@ -2254,59 +2217,60 @@ void MainWindow::readSettings()
   // setup initial value of tx attenuator
   m_block_pwr_tooltip = true;
 
-  // W7PP :
-  // Native FLEX uses this physical control as actual RF watts.
-  // Do not restore stock OutAttenuation into the watts control.
+  // One-time migration: earlier Native FLEX builds repurposed the stock
+  // Pwr slider into RF watts and kept the TX audio level in a
+  // W7PP-private key. RF power has its own control now and Pwr is stock
+  // audio again, so fold that saved level back into the stock key --
+  // same units, tenths of a dB, already inside the stock 0-450 range --
+  // and retire the W7PP key. For any other rig the key is simply
+  // dropped: its value never meant anything there.
+  if (m_settings->contains ("W7PPNativeFlexTxAudioAttenuation"))
+    {
+      if (m_config.rig_name() == "Flex Native VITA-49")
+        {
+          m_settings->setValue (
+              "OutAttenuation",
+              m_settings->value ("W7PPNativeFlexTxAudioAttenuation").toInt ());
+        }
+      m_settings->remove ("W7PPNativeFlexTxAudioAttenuation");
+    }
+
+  // DEVIATION from W7PP: the stock Pwr slider keeps its stock meaning
+  // for every rig, the Flex included -- the donor repurposed it into RF
+  // watts, which this fork gives a control of its own below.
+  // DEVIATION from W7PP: restore WSJT-Z's own stock range (450) here,
+  // not the donor's baseline (200) -- the donor's value is only correct
+  // in its own, unmodified ui file. Taking 200 verbatim would silently
+  // cut this control's pre-existing 45 dB range down to 20 dB for every
+  // user, on every startup.
+  ui->outAttenuation->setRange(0, 450);
+  ui->outAttenuation->setInvertedAppearance(true);
+  ui->outAttenuation->setInvertedControls(true);
+  ui->outAttenuation->setEnabled(true);
+
+  ui->outAttenuation->setToolTip(
+      tr("Adjust Tx audio level"));
+
+  ui->outAttenuation->setValue (m_settings->value ("OutAttenuation", 0).toInt ());
+
+  // W7PP : Native FLEX RF power has a dedicated control, carrying
+  // SmartSDR's rfpower percent unconverted.
   if (m_config.rig_name() == "Flex Native VITA-49")
     {
-      // W7PP : independent Native FLEX TX Audio control.
-      ui->w7ppFlexTxAudioLabel->setVisible(true);
-      ui->w7ppFlexTxAudioAttenuation->setVisible(true);
-      ui->w7ppFlexTxAudioScaleWidget->setVisible(true);
+      ui->w7ppFlexRfPowerLabel->setVisible(true);
+      ui->w7ppFlexRfPower->setVisible(true);
 
-      ui->w7ppFlexTxAudioAttenuation->setRange(0, 200);
-      ui->w7ppFlexTxAudioAttenuation->setInvertedAppearance(true);
-      ui->w7ppFlexTxAudioAttenuation->setInvertedControls(true);
-
-      int const native_flex_audio_attenuation =
-          qBound(
-              0,
-              m_settings->value(
-                  "W7PPNativeFlexTxAudioAttenuation",
-                  0).toInt(),
-              200);
-
-      ui->w7ppFlexTxAudioAttenuation->setValue(
-          native_flex_audio_attenuation);
-
-      // Establish SoundOutput::m_volume even when restored value
-      // is zero and QSlider::valueChanged therefore does not fire.
-      Q_EMIT outAttenuationChanged(
-          native_flex_audio_attenuation / 10.0);
-
-      ui->outAttenuation->setProperty(
+      ui->w7ppFlexRfPower->setProperty(
           "w7ppNativeFlexPowerReady", false);
 
-      // Keep the control disabled until the radio itself reports
-      // both PA capability and current rfpower.
-      ui->outAttenuation->setEnabled(false);
-      ui->outAttenuation->setRange(0, 100);
+      // Keep the control disabled until the radio itself reports its
+      // current rfpower and whether it will accept a change.
+      ui->w7ppFlexRfPower->setEnabled(false);
 
-      // Watts are intuitive: maximum at top, zero at bottom.
-      ui->outAttenuation->setInvertedAppearance(false);
-      ui->outAttenuation->setInvertedControls(false);
-
-      // W7PP : outAttenuation is now repurposed to Flex RF watts.
-      // Record this so a later real Flex->non-Flex transition (in
-      // on_actionSettings_triggered()) knows to restore stock
-      // geometry and a sane value -- and so it does nothing at all
-      // when this never happened (the ordinary non-Flex case).
-      m_flexOutAttenuationRepurposed = true;
-
-      ui->outAttenuation->setToolTip(
+      ui->w7ppFlexRfPower->setToolTip(
           tr("Waiting for FLEX RF power status"));
 
-      ui->outAttenuation->setValue(0);
+      ui->w7ppFlexRfPower->setValue(0);
 
       // Status is asynchronous. A few bounded one-shot checks
       // avoid any permanent polling process.
@@ -2317,22 +2281,16 @@ void MainWindow::readSettings()
               return;
             }
 
-          if (ui->outAttenuation->property(
+          if (ui->w7ppFlexRfPower->property(
                   "w7ppNativeFlexPowerReady").toBool())
             {
               return;
             }
 
-          bool max_ok = false;
           bool rf_ok = false;
           bool allowed_ok = false;
 
-          int const max_watts =
-              qApp->property(
-                  "W7PPNativeFlexMaxInternalPaPower")
-                  .toInt(&max_ok);
-
-          int const rf_level =
+          int const reported_percent =
               qApp->property(
                   "W7PPNativeFlexRfPower")
                   .toInt(&rf_ok);
@@ -2342,28 +2300,18 @@ void MainWindow::readSettings()
                   "W7PPNativeFlexRfPowerChangesAllowed")
                   .toInt(&allowed_ok);
 
-          // W7PP : all three asynchronous FLEX power
-          // properties must exist before PowerReady is latched.
-          if (!max_ok
-              || max_watts <= 0
-              || !rf_ok
-              || rf_level < 0
-              || rf_level > 100
+          // DEVIATION from W7PP: the maximum internal PA power is no
+          // longer part of this test. The slider is SmartSDR's own
+          // rfpower percent, so nothing needs converting into watts
+          // before the control can be trusted -- and a radio that has
+          // not yet reported its PA size no longer blocks the restore.
+          if (!rf_ok
+              || reported_percent < 0
+              || reported_percent > 100
               || !allowed_ok)
             {
               return;
             }
-
-          int const current_watts =
-              qBound(
-                  0,
-                  qRound(
-                      double(rf_level)
-                      * double(max_watts)
-                      / 100.0),
-                  max_watts);
-
-          ui->outAttenuation->setMaximum(max_watts);
 
           QString const startup_band =
               ui->bandComboBox->currentText().trimmed();
@@ -2372,73 +2320,58 @@ void MainWindow::readSettings()
           FlexBandLevels::LevelSet const startup_levels =
               m_flexBandLevels.peek(startup_band);
 
-          // W7PP : restore the operator's saved watts when the radio
+          // W7PP : restore the operator's saved level when the radio
           // permits power changes; otherwise show the radio's own
-          // report and keep the control disabled.
-          int display_watts = current_watts;
+          // report and keep the control disabled. A stored value put on
+          // a slider the radio will not honour would claim a power the
+          // rig is not at, with no way to correct it.
+          int display = reported_percent;
 
           if (changes_allowed != 0)
             {
-              int const stored_watts =
-                  startup_levels.values[FlexBandLevels::RfWatts];
+              int const stored_percent =
+                  startup_levels.values[FlexBandLevels::RfPercent];
 
-              int const saved_watts =
-                  stored_watts >= 0 ? stored_watts : current_watts;
-
-              display_watts =
-                  qBound(0, saved_watts, max_watts);
+              display =
+                  qBound(0,
+                         stored_percent >= 0 ? stored_percent : reported_percent,
+                         100);
             }
 
           m_block_pwr_tooltip = true;
-          ui->outAttenuation->setValue(display_watts);
+          ui->w7ppFlexRfPower->setValue(display);
           m_block_pwr_tooltip = false;
 
           if (changes_allowed != 0)
             {
               // Deliver the restored value so slider and radio agree
               // before the operator takes over.
-              if (display_watts != current_watts)
+              if (display != reported_percent)
                 {
-                  int const display_percent =
-                      qBound(
-                          0,
-                          qRound(
-                              double(display_watts)
-                              * 100.0
-                              / double(max_watts)),
-                          100);
                   // See flexReportedLevel(): prime the chain with the
                   // radio's own value so this push -- and the retries
                   // this lambda makes at 1.5s, 3s, 5s and 8s -- cannot
                   // be deduped away against what was last requested.
-                  if (rf_level != display_percent)
-                    {
-                      m_config.transceiver_tx_rf_power_level(rf_level);
-                    }
-                  m_config.transceiver_tx_rf_power_level(display_percent);
-                  // Guard on the watts the echo will carry, not the
-                  // watts pushed: the percent round trip may not be
-                  // exact. See switchBand().
+                  m_config.transceiver_tx_rf_power_level(reported_percent);
+                  m_config.transceiver_tx_rf_power_level(display);
+                  // DEVIATION from W7PP: guard on the value pushed.
+                  // The store holds SmartSDR percent now, which is
+                  // exactly what the echo carries, so the converted
+                  // guard value the watts round trip needed is gone.
                   m_flexBandLevels.arm_guard(
-                      FlexBandLevels::RfWatts,
-                      qBound(
-                          0,
-                          qRound(
-                              double(display_percent)
-                              * double(max_watts)
-                              / 100.0),
-                          max_watts),
+                      FlexBandLevels::RfPercent,
+                      display,
                       startup_now);
                 }
 
-              ui->outAttenuation->setEnabled(true);
-              ui->outAttenuation->setToolTip(
-                  tr("Set Native FLEX RF transmit power"));
+              ui->w7ppFlexRfPower->setEnabled(true);
+              ui->w7ppFlexRfPower->setToolTip(
+                  tr("Set Native FLEX RF transmit power (%)"));
             }
           else
             {
-              ui->outAttenuation->setEnabled(false);
-              ui->outAttenuation->setToolTip(
+              ui->w7ppFlexRfPower->setEnabled(false);
+              ui->w7ppFlexRfPower->setToolTip(
                   tr("The radio does not currently allow RF power changes"));
             }
 
@@ -2499,7 +2432,7 @@ void MainWindow::readSettings()
                   startup_now);
             }
 
-          ui->outAttenuation->setProperty(
+          ui->w7ppFlexRfPower->setProperty(
               "w7ppNativeFlexPowerReady", true);
         };
 
@@ -2516,20 +2449,8 @@ void MainWindow::readSettings()
     }
   else
     {
-      // DEVIATION from W7PP: restore WSJT-Z's own stock range (450)
-      // here, not the donor's baseline (200) -- the donor's value is
-      // only correct in its own, unmodified ui file. Taking 200
-      // verbatim would silently cut this control's pre-existing 45 dB
-      // range down to 20 dB for every non-Flex user, on every startup.
-      ui->outAttenuation->setRange(0, 450);
-      ui->outAttenuation->setInvertedAppearance(true);
-      ui->outAttenuation->setInvertedControls(true);
-      ui->outAttenuation->setEnabled(true);
-
-      ui->outAttenuation->setToolTip(
-          tr("Adjust Tx audio level"));
-
-      ui->outAttenuation->setValue (m_settings->value ("OutAttenuation", 0).toInt ());
+      ui->w7ppFlexRfPowerLabel->setVisible(false);
+      ui->w7ppFlexRfPower->setVisible(false);
     }
   // W7PP : restore Native FLEX RX operator gain setting.
   ui->w7ppFlexRxGainSlider->setValue(
@@ -3410,80 +3331,40 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
     m_flex_rx_audio = new_flex_rx_audio;
     // W7PP : follow Native FLEX RX selection immediately.
     ui->w7ppFlexRxGainWidget->setVisible(m_flex_rx_audio);
-    // DEVIATION from W7PP: the donor sets up the TX-audio widgets and
-    // repurposes outAttenuation into RF watts exactly once, in
-    // readSettings() at startup, and never reverses either change --
-    // correct only because the donor never lets rig_name() change
-    // without a restart. WSJT-Z reaches this same rig selection from
-    // the Settings dialog while running, so leaving Native FLEX here
-    // must undo both, or the operator is left with the Flex TX-audio
-    // slider still on screen, and outAttenuation still mis-ranged and
-    // un-inverted for a rig where this slider means audio dB, not
-    // watts -- silently driving the wrong TX audio level, not merely
-    // a cosmetic leftover.
-    if (m_config.rig_name() != "Flex Native VITA-49")
+    // DEVIATION from W7PP: the donor shows its Native FLEX power
+    // control exactly once, in readSettings() at startup, and never
+    // reverses that -- correct only because the donor never lets
+    // rig_name() change without a restart. WSJT-Z reaches this same rig
+    // selection from the Settings dialog while running, and
+    // readSettings() is called only from the constructor, so the rig
+    // change has to be followed here or the RF slider is left on screen
+    // for a rig that has no rfpower command behind it.
+    //
+    // Only visibility and readiness are touched. outAttenuation needs
+    // nothing: it is the stock Tx audio control in every mode now, so
+    // there is no repurposing to undo and no stale watts value to
+    // rescue -- the hazard the donor's restore existed for is gone with
+    // the repurposing itself.
+    if (m_config.is_flex_native_rig ())
       {
-        ui->w7ppFlexTxAudioLabel->setVisible(false);
-        ui->w7ppFlexTxAudioAttenuation->setVisible(false);
-        ui->w7ppFlexTxAudioScaleWidget->setVisible(false);
+        ui->w7ppFlexRfPowerLabel->setVisible (!ui->cbMini->isChecked ());
+        ui->w7ppFlexRfPower->setVisible (!ui->cbMini->isChecked ());
 
-        // DEVIATION from W7PP: gate the outAttenuation restore on an
-        // actual, detected Flex->non-Flex transition rather than on
-        // "the current rig happens not to be Flex" -- which is true on
-        // essentially every accepted Settings dialog for the entire
-        // non-Flex install base. Without this flag, an ordinary
-        // non-Flex operator who changed bands (per-band power memory
-        // is not persisted until app close) or moved the power slider
-        // during the session, then opened Settings for any unrelated
-        // reason and clicked OK, would have TX audio drive silently
-        // reverted to whatever was on disk at last startup, and the
-        // current band's power memory corrupted with that stale
-        // value -- exactly the harm this restore exists to prevent,
-        // reached through a far more common path than a rig switch.
-        // When outAttenuation was never repurposed to Flex RF watts,
-        // this block must touch it in no way at all.
-        if (m_flexOutAttenuationRepurposed)
+        // Do not undo a control the startup refresh has already made
+        // live: only a slider still waiting for its first status report
+        // is (re)armed with the waiting state.
+        if (!ui->w7ppFlexRfPower->property ("w7ppNativeFlexPowerReady").toBool ())
           {
-            ui->outAttenuation->setProperty("w7ppNativeFlexPowerReady", false);
-
-            // Stock geometry, taken from mainwindow.ui's own outAttenuation
-            // defaults (not the donor's, which are 0-200 for its own,
-            // unmodified ui file).
-            ui->outAttenuation->setRange(0, 450);
-            ui->outAttenuation->setInvertedAppearance(true);
-            ui->outAttenuation->setInvertedControls(true);
-            ui->outAttenuation->setEnabled(true);
-            ui->outAttenuation->setToolTip(tr("Adjust Tx audio level"));
-
-            // The live value is still a Flex watts number here (e.g.
-            // 40), which the non-Flex path below would misread as dB
-            // attenuation -- a real transition genuinely needs this
-            // restored.
-            m_settings->beginGroup("Common");
-            int const restored_out_attenuation =
-                m_settings->value("OutAttenuation", 0).toInt();
-            m_settings->endGroup();
-
-            m_block_pwr_tooltip = true;
-            ui->outAttenuation->setValue(restored_out_attenuation);
-            m_block_pwr_tooltip = false;
-
-            // DEVIATION from W7PP: QSlider::setValue() above emits
-            // valueChanged() -- which is what actually re-establishes
-            // SoundOutput::m_volume via outAttenuationChanged() -- only
-            // when the restored value differs from the value the
-            // widget already holds. That widget was just showing a
-            // Flex RF-watts number, so a restored dB-attenuation
-            // setting that happens to equal it numerically emits
-            // nothing, leaving m_volume on the Flex TX-audio
-            // attenuation for the new, non-Flex rig. Mirror the same
-            // hazard's fix in readSettings() (see its comment there)
-            // and emit explicitly, using the same a/10.0 scaling as
-            // on_outAttenuation_valueChanged().
-            Q_EMIT outAttenuationChanged(restored_out_attenuation / 10.0);
-
-            m_flexOutAttenuationRepurposed = false;
+            ui->w7ppFlexRfPower->setEnabled (false);
+            ui->w7ppFlexRfPower->setToolTip (tr ("Waiting for FLEX RF power status"));
           }
+      }
+    else
+      {
+        ui->w7ppFlexRfPowerLabel->setVisible (false);
+        ui->w7ppFlexRfPower->setVisible (false);
+        ui->w7ppFlexRfPower->setEnabled (false);
+        ui->w7ppFlexRfPower->setProperty ("w7ppNativeFlexPowerReady", false);
       }
     syncFlexVitaReceiver ();
     // Native Flex RX bypasses Windows soundcard input.
@@ -12833,8 +12714,7 @@ void MainWindow::band_changed (Frequency f)
   auto const&curBand = ui->bandComboBox->currentText();
   
   // Set the attenuation value if options are checked
-  if (m_config.rig_name() != "Flex Native VITA-49"
-      && m_config.pwrBandTxMemory() && !m_tune) {
+  if (m_config.pwrBandTxMemory() && !m_tune) {
     if (m_pwrBandTxMemory.contains(curBand)) {
       ui->outAttenuation->setValue(m_pwrBandTxMemory[curBand].toInt());
     }
@@ -12950,8 +12830,7 @@ void MainWindow::on_tuneButton_clicked (bool checked)
   if (lastChecked == checked) return;
   lastChecked = checked;
   if (checked && m_tune==false) { // we're starting tuning so remember Tx and change pwr to Tune value
-    if (m_config.rig_name() != "Flex Native VITA-49"
-        && m_config.pwrBandTuneMemory ()) {
+    if (m_config.pwrBandTuneMemory ()) {
       auto const& curBand = ui->bandComboBox->currentText();
       m_pwrBandTxMemory[curBand] = ui->outAttenuation->value(); // remember our Tx pwr
       m_PwrBandSetOK = false;
@@ -12981,8 +12860,7 @@ void MainWindow::end_tuning ()
     else
         on_stopTxButton_clicked ();
   // we're turning off so remember our Tune pwr setting and reset to Tx pwr
-  if (m_config.rig_name() != "Flex Native VITA-49"
-      && (m_config.pwrBandTuneMemory() || m_config.pwrBandTxMemory())) {
+  if (m_config.pwrBandTuneMemory() || m_config.pwrBandTxMemory()) {
     auto const& curBand = ui->bandComboBox->currentText();
     m_pwrBandTuneMemory[curBand] = ui->outAttenuation->value(); // remember our Tune pwr
     m_PwrBandSetOK = false;
@@ -13580,6 +13458,10 @@ void MainWindow::pollFlexBandLevels ()
     char const * property;
     FlexBandLevels::Field field;
   } const sources[] = {
+    // DEVIATION from W7PP: rfpower percent is stored exactly as the
+    // radio reports it -- no watts conversion, so no dependence on the
+    // PA size having been reported first.
+    {"W7PPNativeFlexRfPower",     FlexBandLevels::RfPercent},
     {"W7PPNativeFlexSliceAfGain", FlexBandLevels::SliceAfGain},
     {"W7PPNativeFlexDaxRxGain",   FlexBandLevels::DaxRxGain},
     {"W7PPNativeFlexDaxTxGain",   FlexBandLevels::DaxTxGain}
@@ -13592,93 +13474,10 @@ void MainWindow::pollFlexBandLevels ()
           m_flexBandLevels.capture (band, sources[i].field, value, now);
       }
   }
-
-  // RF watts is reported as an rfpower percentage; store the watts the
-  // operator actually sees on the slider.
-  bool max_ok = false;
-  int const max_watts =
-      qApp->property ("W7PPNativeFlexMaxInternalPaPower").toInt (&max_ok);
-  bool rf_ok = false;
-  int const rf_level = qApp->property ("W7PPNativeFlexRfPower").toInt (&rf_ok);
-
-  if (max_ok && max_watts > 0 && rf_ok && rf_level >= 0 && rf_level <= 100) {
-      int const watts =
-          qBound (0, qRound (double (rf_level) * double (max_watts) / 100.0),
-                  max_watts);
-      m_flexBandLevels.capture (band, FlexBandLevels::RfWatts, watts, now);
-  }
 }
 
 void MainWindow::on_outAttenuation_valueChanged (int a)
 {
-  // W7PP :
-  // For Native FLEX this control is RF watts, not audio dB.
-  if (m_config.is_flex_native_rig())
-    {
-      bool max_ok = false;
-      bool allowed_ok = false;
-
-      int const max_watts =
-          qApp->property(
-              "W7PPNativeFlexMaxInternalPaPower")
-              .toInt(&max_ok);
-
-      int const changes_allowed =
-          qApp->property(
-              "W7PPNativeFlexRfPowerChangesAllowed")
-              .toInt(&allowed_ok);
-
-      QString const tt_str =
-          tr("Transmit RF power %1 W").arg(a);
-
-      if (ui->outAttenuation->hasFocus()
-          && !m_block_pwr_tooltip)
-        {
-          QToolTip::showText(
-              QCursor::pos(),
-              tt_str,
-              ui->outAttenuation);
-        }
-
-      // Programmatic changes are display-only.
-      // Startup, status refresh, band changes, etc. cannot
-      // send a power command.
-      if (m_block_pwr_tooltip
-          || !ui->outAttenuation->hasFocus()
-          || !ui->outAttenuation->isEnabled())
-        {
-          return;
-        }
-
-      if (!max_ok
-          || max_watts <= 0
-          || !allowed_ok
-          || changes_allowed == 0)
-        {
-          return;
-        }
-
-      // W7PP : deliver the watts as SmartSDR rfpower percent and
-      // remember the operator's choice.
-      m_config.transceiver_tx_rf_power_level(
-          qBound(
-              0,
-              qRound(
-                  double(a)
-                  * 100.0
-                  / double(max_watts)),
-              100));
-
-      m_flexBandLevels.capture (
-          ui->bandComboBox->currentText ().trimmed (),
-          FlexBandLevels::RfWatts,
-          a,
-          QDateTime::currentMSecsSinceEpoch ());
-
-      // Do NOT fall through to SoundOutput attenuation.
-      return;
-    }
-
   QString tt_str;
   qreal dBAttn {a / 10.};       // slider interpreted as dB / 100
   if (m_tune && m_config.pwrBandTuneMemory()) {
@@ -13702,6 +13501,64 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
   } else {
     Q_EMIT outAttenuationChanged (dBAttn);
   }
+}
+
+// W7PP : the dedicated Native FLEX RF power control. Its value is
+// SmartSDR's rfpower percent and is sent unconverted; the stock Pwr
+// slider above stays Tx audio for the Flex as for any other rig.
+void MainWindow::on_w7ppFlexRfPower_valueChanged (int percent)
+{
+  if (!m_config.is_flex_native_rig ())
+    {
+      return;
+    }
+
+  QString tt_str = tr ("Transmit RF power %1 %").arg (percent);
+
+  // The PA size is known only once the radio has reported it, and it is
+  // wanted for nothing but this readout: percent is what gets sent.
+  bool max_ok = false;
+  int const max_watts =
+      qApp->property ("W7PPNativeFlexMaxInternalPaPower").toInt (&max_ok);
+  if (max_ok && max_watts > 0)
+    {
+      tt_str += tr (" (≈ %1 W)")
+                    .arg (qBound (0,
+                                  qRound (double (percent)
+                                          * double (max_watts) / 100.0),
+                                  max_watts));
+    }
+
+  if (ui->w7ppFlexRfPower->hasFocus () && !m_block_pwr_tooltip)
+    {
+      QToolTip::showText (QCursor::pos (), tt_str, ui->w7ppFlexRfPower);
+    }
+
+  // Programmatic changes are display-only. Startup, status refresh,
+  // band changes, etc. cannot send a power command.
+  if (m_block_pwr_tooltip
+      || !ui->w7ppFlexRfPower->hasFocus ()
+      || !ui->w7ppFlexRfPower->isEnabled ())
+    {
+      return;
+    }
+
+  bool allowed_ok = false;
+  int const changes_allowed =
+      qApp->property ("W7PPNativeFlexRfPowerChangesAllowed").toInt (&allowed_ok);
+
+  if (!allowed_ok || changes_allowed == 0)
+    {
+      return;
+    }
+
+  m_config.transceiver_tx_rf_power_level (percent);
+
+  m_flexBandLevels.capture (
+      ui->bandComboBox->currentText ().trimmed (),
+      FlexBandLevels::RfPercent,
+      percent,
+      QDateTime::currentMSecsSinceEpoch ());
 }
 
 void MainWindow::on_actionShort_list_of_add_on_prefixes_and_suffixes_triggered()
@@ -17097,6 +16954,11 @@ void MainWindow::on_cbMini_toggled(bool b) {
         ui->QSO_controls_widget->setVisible(!b);
         ui->outAttenuation->setVisible(!b);
         ui->label_16->setVisible(!b);
+        // W7PP : the Native FLEX RF power control follows the stock Pwr
+        // slider into and out of mini mode, but only when it belongs on
+        // screen at all.
+        ui->w7ppFlexRfPower->setVisible (!b && m_config.is_flex_native_rig ());
+        ui->w7ppFlexRfPowerLabel->setVisible (!b && m_config.is_flex_native_rig ());
         ui->logQSOButton->setVisible(!b);
         ui->monitorButton->setVisible(!b);
         ui->DecodeButton->setVisible(!b);
@@ -17870,21 +17732,21 @@ void MainWindow::switchBand(int row) {
             int const changes_allowed =
                 qApp->property ("W7PPNativeFlexRfPowerChangesAllowed")
                     .toInt (&allowed_ok);
-            bool max_ok = false;
-            int const max_watts =
-                qApp->property ("W7PPNativeFlexMaxInternalPaPower")
-                    .toInt (&max_ok);
 
-            if (levels.values[FlexBandLevels::RfWatts] >= 0
-                && allowed_ok && changes_allowed != 0
-                && max_ok && max_watts > 0) {
-                int const watts =
-                    qBound (0, levels.values[FlexBandLevels::RfWatts], max_watts);
+            // DEVIATION from W7PP: no PA size is needed and no
+            // conversion happens -- the store holds SmartSDR rfpower
+            // percent, which is what both the slider and the radio use.
+            //
+            // The slider is set only inside this test, so a radio that
+            // will not accept a power change never has a stored value
+            // put on its display: the control keeps whatever the radio
+            // itself last reported, as in readSettings() above.
+            if (levels.values[FlexBandLevels::RfPercent] >= 0
+                && allowed_ok && changes_allowed != 0) {
                 int const percent =
-                    qBound (0, qRound (double (watts) * 100.0 / double (max_watts)),
-                            100);
+                    qBound (0, levels.values[FlexBandLevels::RfPercent], 100);
                 m_block_pwr_tooltip = true;
-                ui->outAttenuation->setValue (watts);
+                ui->w7ppFlexRfPower->setValue (percent);
                 m_block_pwr_tooltip = false;
                 // See flexReportedLevel(): prime the chain with the
                 // radio's own value so the dispatch cannot dedupe the
@@ -17895,15 +17757,10 @@ void MainWindow::switchBand(int row) {
                     m_config.transceiver_tx_rf_power_level (reported_percent);
                 }
                 m_config.transceiver_tx_rf_power_level (percent);
-                // Arm the guard on the watts the echo will actually
-                // carry: the radio reports rfpower percent, which
-                // pollFlexBandLevels() converts back to watts, and that
-                // round trip need not land on the exact watts pushed.
+                // The echo carries exactly the percent pushed, so the
+                // guard is armed on that value.
                 m_flexBandLevels.arm_guard (
-                    FlexBandLevels::RfWatts,
-                    qBound (0, qRound (double (percent) * double (max_watts) / 100.0),
-                            max_watts),
-                    arrival_now);
+                    FlexBandLevels::RfPercent, percent, arrival_now);
             }
 
             if (levels.values[FlexBandLevels::SliceAfGain] >= 0) {

@@ -44,7 +44,7 @@ class FlexBandLevels
 public:
   enum Field
   {
-    RfWatts,
+    RfPercent,                  // SmartSDR rfpower percent 0-100
     SliceAfGain,
     DaxRxGain,
     DaxTxGain,
@@ -85,9 +85,11 @@ public:
   void load (QSettings&);
   void save (QSettings&) const;
 
-  // Seed RfWatts for every named band from the pre-per-band global
+  // Seed RfPercent for every named band from the pre-per-band global
   // key, so the first run after upgrading behaves as before. Bands
-  // that already hold a value are left alone.
+  // that already hold a value are left alone. The legacy key holds
+  // watts, which on the 100 W radios this supports is the same number
+  // as the percent now stored, so it is seeded unconverted.
   void migrate_legacy_watts (QSettings&, QStringList const& bands);
 
   static QString const& settings_key ();

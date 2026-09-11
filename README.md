@@ -85,9 +85,11 @@ Working and used on the air:
 - **CAT** — slice creation, frequency, mode, PTT, and a TX safety interlock that refuses to
   key when the radio reports transmit is not permitted
 - **GUI client coexistence** — start with SmartSDR (Windows or Mac) or another GUI client open or closed; either way the radio ends up as you left it
-- **RF power** — the power slider sets the radio's RF output (watts, scaled to the PA
-  capability the radio reports); disabled when the radio reports power changes are not
-  permitted
+- **RF power** — a dedicated `RF` slider, beside the stock `Pwr` slider and shown only for
+  this radio, sets SmartSDR's `rfpower` directly as 0–100 %; it is disabled when the radio
+  reports power changes are not permitted, and its tooltip shows the approximate watts once
+  the radio has reported its PA size. `Pwr` keeps its stock meaning — Tx audio level — here
+  exactly as on any other rig
 - **Radio selection** — persisted across restarts; multiple radios on the network are
   listed as their discovery announcements arrive, and a radio outside the broadcast
   domain can be entered directly as `host` or `host:port`
@@ -110,6 +112,10 @@ Verified on a **FLEX-8400M**, SmartSDR 3.1.0.4, firmware 4.2.20.41343, on macOS.
   `transmit` status checked against live hardware first.
 - Coexistence has been exercised against a scripted radio (`test_native_flex_transceiver`),
   not yet on the air from this fork.
+- **Per-band power values saved by earlier builds were watts and are now read as percent.**
+  The stored numbers are carried over unchanged, which is exact on a 100 W PA (percent and
+  watts are the same number there) and wrong in proportion on any other. On a radio with a
+  different PA, set the power once per band and the store corrects itself.
 - Tested only on an 8000-series radio so far. The donor was developed against 6000-series.
 
 ## Build (macOS)
