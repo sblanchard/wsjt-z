@@ -13559,6 +13559,19 @@ void MainWindow::pollFlexBandLevels ()
           qApp->property ("W7PPNativeFlexRfPower").toInt (&rf_ok);
       if (rf_ok && percent >= 0 && percent <= 100) {
           m_flexBandLevels.capture (band, FlexBandLevels::RfPercent, percent, now);
+
+          // Follow the radio: a level changed in SmartSDR, or a push
+          // that never landed, shows up here within a second. Leave the
+          // slider alone while the operator holds it, and for two
+          // seconds after a push so the radio's echo, not the old
+          // value, is what lands on it.
+          if (percent != ui->w7ppFlexRfPower->value ()
+              && !ui->w7ppFlexRfPower->isSliderDown ()
+              && now - m_flexRfPowerPushedAt > 2000) {
+              m_block_pwr_tooltip = true;
+              ui->w7ppFlexRfPower->setValue (percent);
+              m_block_pwr_tooltip = false;
+          }
       }
   }
 }
@@ -13626,9 +13639,14 @@ void MainWindow::on_w7ppFlexRfPower_valueChanged (int percent)
     }
 
   // Programmatic changes are display-only. Startup, status refresh,
-  // band changes, etc. cannot send a power command.
+  // band changes, etc. wrap their setValue() in m_block_pwr_tooltip and
+  // cannot send a power command.
+  //
+  // DEVIATION from W7PP: no hasFocus() test. On macOS a QSlider takes
+  // only tab focus (SH_Button_FocusPolicy), so a mouse drag never
+  // focuses it and every operator change was silently dropped: the
+  // slider read 100 while the radio sat at rfpower=6 (seen 2026-09-11).
   if (m_block_pwr_tooltip
-      || !ui->w7ppFlexRfPower->hasFocus ()
       || !ui->w7ppFlexRfPower->isEnabled ())
     {
       return;
@@ -13644,12 +13662,13 @@ void MainWindow::on_w7ppFlexRfPower_valueChanged (int percent)
     }
 
   m_config.transceiver_tx_rf_power_level (percent);
+  m_flexRfPowerPushedAt = QDateTime::currentMSecsSinceEpoch ();
 
   m_flexBandLevels.capture (
       ui->bandComboBox->currentText ().trimmed (),
       FlexBandLevels::RfPercent,
       percent,
-      QDateTime::currentMSecsSinceEpoch ());
+      m_flexRfPowerPushedAt);
 }
 
 void MainWindow::on_actionShort_list_of_add_on_prefixes_and_suffixes_triggered()

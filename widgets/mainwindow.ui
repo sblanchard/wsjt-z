@@ -4705,6 +4705,9 @@ list. The list can be maintained in Settings (F2).</string>
               </item>
               <item>
                <widget class="QSlider" name="w7ppFlexRfPower">
+                <property name="focusPolicy">
+                 <enum>Qt::StrongFocus</enum>
+                </property>
                 <property name="visible">
                  <bool>false</bool>
                 </property>
