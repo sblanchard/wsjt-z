@@ -164,6 +164,12 @@ private:
   // properties, or -1 when it has reported nothing usable yet.
   // A plain const helper, not a slot.
   int flexReportedLevel (char const * property) const;
+  // W7PP : the dedicated Native FLEX RF power control comes alive only
+  // once the radio has reported its power status, which is
+  // asynchronous. armNativeFlexPowerRefresh() schedules the bounded
+  // retries; refreshNativeFlexPowerUi() is one of those checks.
+  void refreshNativeFlexPowerUi ();
+  void armNativeFlexPowerRefresh ();
   // W7PP native Flex 12 kHz decoder-buffer ingress.
   void flexDataSink (FlexVitaReceiver::DecoderBlock const& samples);
   void syncFlexVitaReceiver ();
@@ -734,6 +740,8 @@ private:
   int     m_flex_vita_generation {0};
   bool    m_flex_vita_watchdog_armed {false};
   quint64 m_flex_vita_watchdog_packets {0};
+  bool    m_flexPowerUiArmed {false};           // W7PP : the RF power status retries are armed for the current rig
+  bool    m_flexStartupLevelsRestored {false};  // W7PP : the starting band's gains are pushed once per arming round
   bool    inSettings = false;
   bool    m_diskData;
   bool    m_loopall;

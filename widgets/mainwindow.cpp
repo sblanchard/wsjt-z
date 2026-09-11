@@ -1493,7 +1493,11 @@ MainWindow::MainWindow(QDir const& temp_directory, bool multiple,
   }
 */
 
-    ui->verticalLayout_3->setAlignment(ui->outAttenuation, Qt::AlignHCenter);
+    // W7PP : outAttenuation lives in its own column of w7ppFlexPwrLayout
+    // now, so the alignment has to be set on that column -- QLayout::
+    // setAlignment() silently returns false for a widget it does not own.
+    ui->w7ppFlexPwrColumn->setAlignment(ui->outAttenuation, Qt::AlignHCenter);
+    ui->w7ppFlexRfPowerColumn->setAlignment(ui->w7ppFlexRfPower, Qt::AlignHCenter);
     ui->w_callInfo->setVisible(ui->actionCall_info->isChecked());
     ui->label_3->setText(tr("<a href=\"qrz-lookup\">DX Call</a>"));
     ui->label_3->setTextInteractionFlags(Qt::TextBrowserInteraction);
@@ -2274,178 +2278,7 @@ void MainWindow::readSettings()
 
       // Status is asynchronous. A few bounded one-shot checks
       // avoid any permanent polling process.
-      auto const refresh_native_flex_power_ui = [this] ()
-        {
-          if (m_config.rig_name() != "Flex Native VITA-49")
-            {
-              return;
-            }
-
-          if (ui->w7ppFlexRfPower->property(
-                  "w7ppNativeFlexPowerReady").toBool())
-            {
-              return;
-            }
-
-          bool rf_ok = false;
-          bool allowed_ok = false;
-
-          int const reported_percent =
-              qApp->property(
-                  "W7PPNativeFlexRfPower")
-                  .toInt(&rf_ok);
-
-          int const changes_allowed =
-              qApp->property(
-                  "W7PPNativeFlexRfPowerChangesAllowed")
-                  .toInt(&allowed_ok);
-
-          // DEVIATION from W7PP: the maximum internal PA power is no
-          // longer part of this test. The slider is SmartSDR's own
-          // rfpower percent, so nothing needs converting into watts
-          // before the control can be trusted -- and a radio that has
-          // not yet reported its PA size no longer blocks the restore.
-          if (!rf_ok
-              || reported_percent < 0
-              || reported_percent > 100
-              || !allowed_ok)
-            {
-              return;
-            }
-
-          QString const startup_band =
-              ui->bandComboBox->currentText().trimmed();
-          qint64 const startup_now =
-              QDateTime::currentMSecsSinceEpoch();
-          FlexBandLevels::LevelSet const startup_levels =
-              m_flexBandLevels.peek(startup_band);
-
-          // W7PP : restore the operator's saved level when the radio
-          // permits power changes; otherwise show the radio's own
-          // report and keep the control disabled. A stored value put on
-          // a slider the radio will not honour would claim a power the
-          // rig is not at, with no way to correct it.
-          int display = reported_percent;
-
-          if (changes_allowed != 0)
-            {
-              int const stored_percent =
-                  startup_levels.values[FlexBandLevels::RfPercent];
-
-              display =
-                  qBound(0,
-                         stored_percent >= 0 ? stored_percent : reported_percent,
-                         100);
-            }
-
-          m_block_pwr_tooltip = true;
-          ui->w7ppFlexRfPower->setValue(display);
-          m_block_pwr_tooltip = false;
-
-          if (changes_allowed != 0)
-            {
-              // Deliver the restored value so slider and radio agree
-              // before the operator takes over.
-              if (display != reported_percent)
-                {
-                  // See flexReportedLevel(): prime the chain with the
-                  // radio's own value so this push -- and the retries
-                  // this lambda makes at 1.5s, 3s, 5s and 8s -- cannot
-                  // be deduped away against what was last requested.
-                  m_config.transceiver_tx_rf_power_level(reported_percent);
-                  m_config.transceiver_tx_rf_power_level(display);
-                  // DEVIATION from W7PP: guard on the value pushed.
-                  // The store holds SmartSDR percent now, which is
-                  // exactly what the echo carries, so the converted
-                  // guard value the watts round trip needed is gone.
-                  m_flexBandLevels.arm_guard(
-                      FlexBandLevels::RfPercent,
-                      display,
-                      startup_now);
-                }
-
-              ui->w7ppFlexRfPower->setEnabled(true);
-              ui->w7ppFlexRfPower->setToolTip(
-                  tr("Set Native FLEX RF transmit power (%)"));
-            }
-          else
-            {
-              ui->w7ppFlexRfPower->setEnabled(false);
-              ui->w7ppFlexRfPower->setToolTip(
-                  tr("The radio does not currently allow RF power changes"));
-            }
-
-          // Restore slice AF gain and DAX gains for the starting band too.
-          // Without this, pollFlexBandLevels() (running once a second) would
-          // overwrite the operator's saved values for this band with
-          // whatever the radio happens to report before a real band hop
-          // ever calls switchBand() to push them back.
-          if (startup_levels.values[FlexBandLevels::SliceAfGain] >= 0)
-            {
-              int const reported =
-                  flexReportedLevel("W7PPNativeFlexSliceAfGain");
-              if (reported >= 0
-                  && reported
-                         != startup_levels.values[FlexBandLevels::SliceAfGain])
-                {
-                  m_config.transceiver_slice_af_gain(reported);
-                }
-              m_config.transceiver_slice_af_gain(
-                  startup_levels.values[FlexBandLevels::SliceAfGain]);
-              m_flexBandLevels.arm_guard(
-                  FlexBandLevels::SliceAfGain,
-                  startup_levels.values[FlexBandLevels::SliceAfGain],
-                  startup_now);
-            }
-          if (startup_levels.values[FlexBandLevels::DaxRxGain] >= 0)
-            {
-              int const reported =
-                  flexReportedLevel("W7PPNativeFlexDaxRxGain");
-              if (reported >= 0
-                  && reported
-                         != startup_levels.values[FlexBandLevels::DaxRxGain])
-                {
-                  m_config.transceiver_dax_gain(reported, false);
-                }
-              m_config.transceiver_dax_gain(
-                  startup_levels.values[FlexBandLevels::DaxRxGain], false);
-              m_flexBandLevels.arm_guard(
-                  FlexBandLevels::DaxRxGain,
-                  startup_levels.values[FlexBandLevels::DaxRxGain],
-                  startup_now);
-            }
-          if (startup_levels.values[FlexBandLevels::DaxTxGain] >= 0)
-            {
-              int const reported =
-                  flexReportedLevel("W7PPNativeFlexDaxTxGain");
-              if (reported >= 0
-                  && reported
-                         != startup_levels.values[FlexBandLevels::DaxTxGain])
-                {
-                  m_config.transceiver_dax_gain(reported, true);
-                }
-              m_config.transceiver_dax_gain(
-                  startup_levels.values[FlexBandLevels::DaxTxGain], true);
-              m_flexBandLevels.arm_guard(
-                  FlexBandLevels::DaxTxGain,
-                  startup_levels.values[FlexBandLevels::DaxTxGain],
-                  startup_now);
-            }
-
-          ui->w7ppFlexRfPower->setProperty(
-              "w7ppNativeFlexPowerReady", true);
-        };
-
-      QTimer::singleShot(
-          500, this, refresh_native_flex_power_ui);
-      QTimer::singleShot(
-          1500, this, refresh_native_flex_power_ui);
-      QTimer::singleShot(
-          3000, this, refresh_native_flex_power_ui);
-      QTimer::singleShot(
-          5000, this, refresh_native_flex_power_ui);
-      QTimer::singleShot(
-          8000, this, refresh_native_flex_power_ui);
+      armNativeFlexPowerRefresh ();
     }
   else
     {
@@ -3350,13 +3183,21 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
         ui->w7ppFlexRfPowerLabel->setVisible (!ui->cbMini->isChecked ());
         ui->w7ppFlexRfPower->setVisible (!ui->cbMini->isChecked ());
 
-        // Do not undo a control the startup refresh has already made
-        // live: only a slider still waiting for its first status report
-        // is (re)armed with the waiting state.
-        if (!ui->w7ppFlexRfPower->property ("w7ppNativeFlexPowerReady").toBool ())
+        // Only a genuine non-Flex -> Flex transition puts the control
+        // back into its waiting state and re-arms the status retries.
+        // readSettings() runs from the constructor alone, so nothing
+        // else would ever bring the slider live after a rig change --
+        // but re-arming on every accepted Settings dialog would knock a
+        // working control back to "waiting" for no reason. Visibility
+        // cannot stand in for this test: mini mode hides the slider
+        // while the rig is still the Flex.
+        if (!m_flexPowerUiArmed)
           {
+            ui->w7ppFlexRfPower->setProperty ("w7ppNativeFlexPowerReady", false);
             ui->w7ppFlexRfPower->setEnabled (false);
             ui->w7ppFlexRfPower->setToolTip (tr ("Waiting for FLEX RF power status"));
+
+            armNativeFlexPowerRefresh ();
           }
       }
     else
@@ -3365,6 +3206,7 @@ void MainWindow::on_actionSettings_triggered()               //Setup Dialog
         ui->w7ppFlexRfPower->setVisible (false);
         ui->w7ppFlexRfPower->setEnabled (false);
         ui->w7ppFlexRfPower->setProperty ("w7ppNativeFlexPowerReady", false);
+        m_flexPowerUiArmed = false;
       }
     syncFlexVitaReceiver ();
     // Native Flex RX bypasses Windows soundcard input.
@@ -13445,6 +13287,206 @@ int MainWindow::flexReportedLevel (char const * property) const
 // Record whatever the radio currently reports for this band. Driven by
 // the FLEX status stream via qApp properties, so a level changed in
 // SmartSDR is captured exactly like one changed here.
+// W7PP : bring the dedicated Native FLEX RF power control into line
+// with what the radio reports. Called from armNativeFlexPowerRefresh()'s
+// bounded retries; it is a no-op once the control has gone live.
+void MainWindow::refreshNativeFlexPowerUi ()
+{
+  if (!m_config.is_flex_native_rig ())
+    {
+      return;
+    }
+
+  if (ui->w7ppFlexRfPower->property (
+          "w7ppNativeFlexPowerReady").toBool ())
+    {
+      return;
+    }
+
+  bool rf_ok = false;
+  bool allowed_ok = false;
+
+  int const reported_percent =
+      qApp->property(
+          "W7PPNativeFlexRfPower")
+          .toInt(&rf_ok);
+
+  int const changes_allowed =
+      qApp->property(
+          "W7PPNativeFlexRfPowerChangesAllowed")
+          .toInt(&allowed_ok);
+
+  // DEVIATION from W7PP: the maximum internal PA power is no
+  // longer part of this test. The slider is SmartSDR's own
+  // rfpower percent, so nothing needs converting into watts
+  // before the control can be trusted -- and a radio that has
+  // not yet reported its PA size no longer blocks the restore.
+  if (!rf_ok
+      || reported_percent < 0
+      || reported_percent > 100
+      || !allowed_ok)
+    {
+      return;
+    }
+
+  QString const startup_band =
+      ui->bandComboBox->currentText().trimmed();
+  qint64 const startup_now =
+      QDateTime::currentMSecsSinceEpoch();
+  FlexBandLevels::LevelSet const startup_levels =
+      m_flexBandLevels.peek(startup_band);
+
+  // W7PP : restore the operator's saved level when the radio
+  // permits power changes; otherwise show the radio's own
+  // report and keep the control disabled. A stored value put on
+  // a slider the radio will not honour would claim a power the
+  // rig is not at, with no way to correct it.
+  int display = reported_percent;
+
+  if (changes_allowed != 0)
+    {
+      int const stored_percent =
+          startup_levels.values[FlexBandLevels::RfPercent];
+
+      display =
+          qBound(0,
+                 stored_percent >= 0 ? stored_percent : reported_percent,
+                 100);
+    }
+
+  m_block_pwr_tooltip = true;
+  ui->w7ppFlexRfPower->setValue(display);
+  m_block_pwr_tooltip = false;
+
+  if (changes_allowed != 0)
+    {
+      // Deliver the restored value so slider and radio agree
+      // before the operator takes over.
+      if (display != reported_percent)
+        {
+          // See flexReportedLevel(): prime the chain with the
+          // radio's own value so this push -- and the retries
+          // armNativeFlexPowerRefresh() makes at 1.5s, 3s, 5s
+          // and 8s -- cannot be deduped away against what was
+          // last requested.
+          m_config.transceiver_tx_rf_power_level(reported_percent);
+          m_config.transceiver_tx_rf_power_level(display);
+          // DEVIATION from W7PP: guard on the value pushed.
+          // The store holds SmartSDR percent now, which is
+          // exactly what the echo carries, so the converted
+          // guard value the watts round trip needed is gone.
+          m_flexBandLevels.arm_guard(
+              FlexBandLevels::RfPercent,
+              display,
+              startup_now);
+        }
+
+      ui->w7ppFlexRfPower->setEnabled(true);
+      ui->w7ppFlexRfPower->setToolTip(
+          tr("Set Native FLEX RF transmit power (%)"));
+    }
+  else
+    {
+      ui->w7ppFlexRfPower->setEnabled(false);
+      ui->w7ppFlexRfPower->setToolTip(
+          tr("The radio does not currently allow RF power changes"));
+    }
+
+  // The starting band's gains are restored exactly once per arming
+  // round, however many retries find the radio ready -- repeating
+  // the pushes would re-arm the echo guards and could swallow a
+  // change the operator makes in SmartSDR meanwhile.
+  if (!m_flexStartupLevelsRestored)
+    {
+      m_flexStartupLevelsRestored = true;
+
+      // Restore slice AF gain and DAX gains for the starting band too.
+      // Without this, pollFlexBandLevels() (running once a second) would
+      // overwrite the operator's saved values for this band with
+      // whatever the radio happens to report before a real band hop
+      // ever calls switchBand() to push them back.
+      if (startup_levels.values[FlexBandLevels::SliceAfGain] >= 0)
+        {
+          int const reported =
+              flexReportedLevel("W7PPNativeFlexSliceAfGain");
+          if (reported >= 0
+              && reported
+                     != startup_levels.values[FlexBandLevels::SliceAfGain])
+            {
+              m_config.transceiver_slice_af_gain(reported);
+            }
+          m_config.transceiver_slice_af_gain(
+              startup_levels.values[FlexBandLevels::SliceAfGain]);
+          m_flexBandLevels.arm_guard(
+              FlexBandLevels::SliceAfGain,
+              startup_levels.values[FlexBandLevels::SliceAfGain],
+              startup_now);
+        }
+      if (startup_levels.values[FlexBandLevels::DaxRxGain] >= 0)
+        {
+          int const reported =
+              flexReportedLevel("W7PPNativeFlexDaxRxGain");
+          if (reported >= 0
+              && reported
+                     != startup_levels.values[FlexBandLevels::DaxRxGain])
+            {
+              m_config.transceiver_dax_gain(reported, false);
+            }
+          m_config.transceiver_dax_gain(
+              startup_levels.values[FlexBandLevels::DaxRxGain], false);
+          m_flexBandLevels.arm_guard(
+              FlexBandLevels::DaxRxGain,
+              startup_levels.values[FlexBandLevels::DaxRxGain],
+              startup_now);
+        }
+      if (startup_levels.values[FlexBandLevels::DaxTxGain] >= 0)
+        {
+          int const reported =
+              flexReportedLevel("W7PPNativeFlexDaxTxGain");
+          if (reported >= 0
+              && reported
+                     != startup_levels.values[FlexBandLevels::DaxTxGain])
+            {
+              m_config.transceiver_dax_gain(reported, true);
+            }
+          m_config.transceiver_dax_gain(
+              startup_levels.values[FlexBandLevels::DaxTxGain], true);
+          m_flexBandLevels.arm_guard(
+              FlexBandLevels::DaxTxGain,
+              startup_levels.values[FlexBandLevels::DaxTxGain],
+              startup_now);
+        }
+    }
+
+  // DEVIATION from W7PP: latch only when the radio actually
+  // permits power changes. The donor latched unconditionally,
+  // which froze the control in its disabled state for the rest of
+  // the session even after the radio started allowing changes;
+  // leaving the flag clear lets a later retry -- or a fresh
+  // arming round after a rig change -- bring the slider live.
+  if (changes_allowed != 0)
+    {
+      ui->w7ppFlexRfPower->setProperty (
+          "w7ppNativeFlexPowerReady", true);
+    }
+}
+
+// W7PP : the radio's power status arrives asynchronously, so the
+// control is refreshed by a few bounded one-shot checks rather than any
+// permanent polling process. Armed at startup and again whenever the
+// rig is switched to Native FLEX from the Settings dialog.
+void MainWindow::armNativeFlexPowerRefresh ()
+{
+  m_flexPowerUiArmed = true;
+  m_flexStartupLevelsRestored = false;
+
+  QTimer::singleShot (500,  this, &MainWindow::refreshNativeFlexPowerUi);
+  QTimer::singleShot (1500, this, &MainWindow::refreshNativeFlexPowerUi);
+  QTimer::singleShot (3000, this, &MainWindow::refreshNativeFlexPowerUi);
+  QTimer::singleShot (5000, this, &MainWindow::refreshNativeFlexPowerUi);
+  QTimer::singleShot (8000, this, &MainWindow::refreshNativeFlexPowerUi);
+}
+
 void MainWindow::pollFlexBandLevels ()
 {
   if (!m_config.is_flex_native_rig ()) return;
@@ -13458,10 +13500,6 @@ void MainWindow::pollFlexBandLevels ()
     char const * property;
     FlexBandLevels::Field field;
   } const sources[] = {
-    // DEVIATION from W7PP: rfpower percent is stored exactly as the
-    // radio reports it -- no watts conversion, so no dependence on the
-    // PA size having been reported first.
-    {"W7PPNativeFlexRfPower",     FlexBandLevels::RfPercent},
     {"W7PPNativeFlexSliceAfGain", FlexBandLevels::SliceAfGain},
     {"W7PPNativeFlexDaxRxGain",   FlexBandLevels::DaxRxGain},
     {"W7PPNativeFlexDaxTxGain",   FlexBandLevels::DaxTxGain}
@@ -13472,6 +13510,23 @@ void MainWindow::pollFlexBandLevels ()
       int const value = qApp->property (sources[i].property).toInt (&ok);
       if (ok && value >= 0) {
           m_flexBandLevels.capture (band, sources[i].field, value, now);
+      }
+  }
+
+  // DEVIATION from W7PP: rfpower percent is stored exactly as the radio
+  // reports it -- no watts conversion, so no dependence on the PA size
+  // having been reported first.
+  //
+  // It is captured only once the startup restore has latched
+  // w7ppNativeFlexPowerReady. Until then this 1 Hz poll would overwrite
+  // the band's saved level with whatever the radio happens to be at
+  // before the restore has had a chance to push the stored value back.
+  if (ui->w7ppFlexRfPower->property ("w7ppNativeFlexPowerReady").toBool ()) {
+      bool rf_ok = false;
+      int const percent =
+          qApp->property ("W7PPNativeFlexRfPower").toInt (&rf_ok);
+      if (rf_ok && percent >= 0 && percent <= 100) {
+          m_flexBandLevels.capture (band, FlexBandLevels::RfPercent, percent, now);
       }
   }
 }

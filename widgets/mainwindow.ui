@@ -4676,126 +4676,150 @@ list. The list can be maintained in Settings (F2).</string>
            <enum>QLayout::SetDefaultConstraint</enum>
           </property>
           <!-- W7PP : dedicated Native FLEX RF power control. The RF
-               slider sits to the left of the stock Pwr slider and is
+               column sits to the left of the stock Pwr column and is
                hidden for every other rig; Pwr keeps its stock meaning
-               (Tx audio level) in all modes. -->
+               (Tx audio level) in all modes. Each label is centred over
+               its own slider by living in the same column as it. -->
           <item>
-           <layout class="QHBoxLayout" name="w7ppFlexPwrLabelLayout">
+           <layout class="QHBoxLayout" name="w7ppFlexPwrLayout">
             <property name="spacing">
              <number>2</number>
             </property>
             <item>
-             <widget class="QLabel" name="w7ppFlexRfPowerLabel">
-              <property name="visible">
-               <bool>false</bool>
+             <layout class="QVBoxLayout" name="w7ppFlexRfPowerColumn">
+              <property name="spacing">
+               <number>12</number>
               </property>
-              <property name="text">
-               <string>RF</string>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-             </widget>
+              <item>
+               <widget class="QLabel" name="w7ppFlexRfPowerLabel">
+                <property name="visible">
+                 <bool>false</bool>
+                </property>
+                <property name="text">
+                 <string>RF</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignCenter</set>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="w7ppFlexRfPower">
+                <property name="visible">
+                 <bool>false</bool>
+                </property>
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>20</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="toolTip">
+                 <string>Waiting for FLEX RF power status</string>
+                </property>
+                <property name="maximum">
+                 <number>100</number>
+                </property>
+                <property name="value">
+                 <number>0</number>
+                </property>
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="invertedAppearance">
+                 <bool>false</bool>
+                </property>
+                <property name="invertedControls">
+                 <bool>false</bool>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::NoTicks</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>10</number>
+                </property>
+               </widget>
+              </item>
+             </layout>
             </item>
             <item>
-             <widget class="QLabel" name="label_16">
-              <property name="text">
-               <string> Pwr</string>
+             <layout class="QVBoxLayout" name="w7ppFlexPwrColumn">
+              <property name="spacing">
+               <number>12</number>
               </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-             </widget>
+              <item>
+               <widget class="QLabel" name="label_16">
+                <property name="text">
+                 <string> Pwr</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignCenter</set>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="outAttenuation">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>20</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="toolTip">
+                 <string>Adjust Tx audio level</string>
+                </property>
+                <property name="maximum">
+                 <number>450</number>
+                </property>
+                <property name="value">
+                 <number>0</number>
+                </property>
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="invertedAppearance">
+                 <bool>true</bool>
+                </property>
+                <property name="invertedControls">
+                 <bool>true</bool>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::NoTicks</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>50</number>
+                </property>
+               </widget>
+              </item>
+             </layout>
             </item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="w7ppFlexPwrSliderLayout">
-            <property name="spacing">
-             <number>2</number>
-            </property>
             <item>
-             <widget class="QSlider" name="w7ppFlexRfPower">
-              <property name="visible">
-               <bool>false</bool>
+             <spacer name="w7ppFlexPwrSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
               </property>
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
+              <property name="sizeType">
+               <enum>QSizePolicy::Expanding</enum>
               </property>
-              <property name="minimumSize">
+              <property name="sizeHint" stdset="0">
                <size>
-                <width>20</width>
+                <width>0</width>
                 <height>0</height>
                </size>
               </property>
-              <property name="toolTip">
-               <string>Waiting for FLEX RF power status</string>
-              </property>
-              <property name="maximum">
-               <number>100</number>
-              </property>
-              <property name="value">
-               <number>0</number>
-              </property>
-              <property name="orientation">
-               <enum>Qt::Vertical</enum>
-              </property>
-              <property name="invertedAppearance">
-               <bool>false</bool>
-              </property>
-              <property name="invertedControls">
-               <bool>false</bool>
-              </property>
-              <property name="tickPosition">
-               <enum>QSlider::NoTicks</enum>
-              </property>
-              <property name="tickInterval">
-               <number>10</number>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QSlider" name="outAttenuation">
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
-              </property>
-              <property name="minimumSize">
-               <size>
-                <width>20</width>
-                <height>0</height>
-               </size>
-              </property>
-              <property name="toolTip">
-               <string>Adjust Tx audio level</string>
-              </property>
-              <property name="maximum">
-               <number>450</number>
-              </property>
-              <property name="value">
-               <number>0</number>
-              </property>
-              <property name="orientation">
-               <enum>Qt::Vertical</enum>
-              </property>
-              <property name="invertedAppearance">
-               <bool>true</bool>
-              </property>
-              <property name="invertedControls">
-               <bool>true</bool>
-              </property>
-              <property name="tickPosition">
-               <enum>QSlider::NoTicks</enum>
-              </property>
-              <property name="tickInterval">
-               <number>50</number>
-              </property>
-             </widget>
+             </spacer>
             </item>
            </layout>
           </item>
