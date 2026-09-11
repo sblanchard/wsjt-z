@@ -1,7 +1,8 @@
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
+
 #include "NativeFlexTransceiver.hpp"
-#include <QFile>
-#include <QTextStream>
 #include <QCoreApplication>
+#include <QThread>
 #include <QVariant>
 #include <QDebug>
 
@@ -15,6 +16,138 @@
 
 NativeFlexTransceiver::Frequency NativeFlexTransceiver::startup_frequency_ {0};
 int NativeFlexTransceiver::dax_channel_ {1};
+
+namespace
+{
+  /*
+   * W7PP (v1.09.1):
+   *
+   * Publish this session's dynamically assigned DAX-TX stream
+   * route on QCoreApplication's owning thread.
+   *
+   * DEVIATION from W7PP: one helper for the three call sites (the
+   * donor publishes on the application thread after connect but
+   * still clears the route directly), and it never blocks.
+   *
+   * A BlockingQueuedConnection here deadlocks on exit: Configuration
+   * tears the rig down with transceiver_thread_->quit() + wait() while
+   * the main event loop is already stopped, so a publish landing in
+   * that window has the main thread waiting on the transceiver thread
+   * and the transceiver thread waiting on the main thread.
+   *
+   * A plain queued publish is sufficient. The route only has to be
+   * visible before the audio side may transmit, and TX cannot begin
+   * until the resolution/update signals reach the main thread - those
+   * are posted to the same main-thread event queue AFTER this publish
+   * event, so FIFO delivery guarantees the ordering. A queued clear
+   * that never runs because the application is gone is harmless.
+   *
+   * No stream number is hard-coded here.
+   */
+  void publish_native_flex_tx_route(
+      QString const& radio_address,
+      quint32 stream_id)
+  {
+    auto * app = QCoreApplication::instance();
+
+    if (!app)
+      {
+        return;
+      }
+
+    qulonglong const published_tx_stream_id =
+        static_cast<qulonglong>(stream_id);
+
+    auto publish =
+        [radio_address, published_tx_stream_id] ()
+        {
+          auto * app = QCoreApplication::instance();
+
+          if (!app)
+            {
+              return;
+            }
+
+          app->setProperty(
+              "W7PPNativeFlexTxRadioAddress",
+              radio_address);
+
+          app->setProperty(
+              "W7PPNativeFlexTxStreamId",
+              QVariant::fromValue(published_tx_stream_id));
+        };
+
+    if (app->thread() == QThread::currentThread())
+      {
+        publish();
+        return;
+      }
+
+    QMetaObject::invokeMethod(
+        app,
+        publish,
+        Qt::QueuedConnection);
+  }
+
+  /*
+   * Read the "pan=0x...." field of a FLEX slice status line.
+   *
+   * Shared by the two places that need it so the pre-existing
+   * panadapter snapshot and the owned-slice capture cannot drift
+   * apart in how they parse the same field.
+   */
+  bool parse_panadapter_id(
+      QByteArray const& line,
+      quint32 & panadapter_id)
+  {
+    QByteArray const pan_marker {
+        "pan=0x"
+    };
+
+    int const pan_marker_pos =
+        line.indexOf(pan_marker);
+
+    if (pan_marker_pos < 0)
+      {
+        return false;
+      }
+
+    int const pan_start =
+        pan_marker_pos
+        + pan_marker.size();
+
+    int pan_end =
+        line.indexOf(
+            ' ',
+            pan_start);
+
+    if (pan_end < 0)
+      {
+        pan_end =
+            line.size();
+      }
+
+    bool pan_ok = false;
+
+    quint32 const pan =
+        QString::fromLatin1(
+            line.mid(
+                pan_start,
+                pan_end - pan_start))
+            .toUInt(
+                &pan_ok,
+                16);
+
+    if (!pan_ok)
+      {
+        return false;
+      }
+
+    panadapter_id = pan;
+
+    return true;
+  }
+}
 
 void NativeFlexTransceiver::set_startup_frequency(
     Frequency frequency)
@@ -50,6 +183,7 @@ void NativeFlexTransceiver::do_tx_rf_power_level(int level)
 
   send_command(
       QStringLiteral("transmit set rfpower=%1").arg(level));
+  cached_tx_rf_power_level_ = level;
 }
 
 void NativeFlexTransceiver::do_slice_af_gain(int gain)
@@ -156,20 +290,108 @@ void NativeFlexTransceiver::do_dax_gain(int gain, bool tx)
       << would_send;
 }
 
+void NativeFlexTransceiver::capture_smart_sdr_client(
+    QByteArray const& line)
+{
+  /*
+   * Read-only detection of an already-connected GUI client.
+   *
+   * This helper changes no radio state and does not bind clients.
+   *
+   * DEVIATION from W7PP: latch the decision to the mode-decision
+   * window only.
+   *
+   * The donor runs this on every status line for the life of the
+   * session, so a GUI client started AFTER a headless WSJT-Z flips
+   * smart_sdr_present_ mid-session. Everything downstream then
+   * switches path against a session that already took the headless
+   * route: do_ptt() starts writing "slice s <n> tx=1 mode=digu" and
+   * do_stop() starts restoring a previous_tx_slice_id_ that was never
+   * captured. The mode is decided once, around "sub client all".
+   *
+   * DEVIATION from W7PP: any GUI client counts, not only
+   * "program=SmartSDR-Win".
+   *
+   * The donor only ever knew SmartSDR for Windows; this operator
+   * drives the radio from SmartSDR for Mac, and other GUI clients
+   * (AetherSDR, ...) exist. The discriminator is therefore the
+   * non-empty "client_id=" field, which the radio reports only for
+   * clients that registered with "client gui": this fork's own API
+   * connections (the RX bridge, the safety monitor) and other
+   * API-only programs have none, so they never trigger coexistence.
+   * The program name is no longer consulted.
+   *
+   * With several GUI clients connected the last one reported wins;
+   * that is donor behaviour, unchanged.
+   */
+  if (!collecting_clients_)
+    {
+      return;
+    }
+
+  if (
+      !line.startsWith('S')
+      || !line.contains("|client ")
+      || !line.contains(" connected"))
+    {
+      return;
+    }
+
+  QByteArray const marker {"client_id="};
+
+  int const marker_start =
+      line.indexOf(marker);
+
+  if (marker_start < 0)
+    {
+      return;
+    }
+
+  int const value_start =
+      marker_start + marker.size();
+
+  int value_end =
+      line.indexOf(' ', value_start);
+
+  if (value_end < 0)
+    {
+      value_end = line.size();
+    }
+
+  QString const client_id =
+      QString::fromLatin1(
+          line.mid(
+              value_start,
+              value_end - value_start))
+          .trimmed();
+
+  if (client_id.isEmpty())
+    {
+      return;
+    }
+
+  smart_sdr_present_ = true;
+  smart_sdr_client_id_ = client_id;
+}
+
 void NativeFlexTransceiver::capture_owned_slice(
     QByteArray const& line)
 {
   /*
-   * FLEX identifies the slice in status messages rather than
-   * in the successful slice-create response.
+   * FLEX identifies slices in the status stream.
    *
-   * Example:
+   * Headless mode:
+   *   preserve the accepted ownership rule and accept only a
+   *   slice explicitly owned by this W7PP TCP client handle.
    *
-   *   S<handle>|slice 1 ... in_use=1
-   *       client_handle=0x<our handle> ...
+   * SmartSDR coexistence mode:
+   *   first collect every slice number that already exists.
+   *   While W7PP is issuing its own slice-create command,
+   *   accept only a slice number that was not in that snapshot.
    *
-   * Only accept an in-use slice explicitly owned by our
-   * current WSJT TCP client handle.
+   * FLEX may assign that new coexistence slice to the active
+   * SmartSDR GUI handle.  The exact new slice number, rather
+   * than GUI handle ownership, identifies W7PP's slice.
    */
 
   if (!line.startsWith('S'))
@@ -186,51 +408,6 @@ void NativeFlexTransceiver::capture_owned_slice(
     }
 
   if (!line.contains("in_use=1"))
-    {
-      return;
-    }
-
-  QByteArray const handle_marker {
-      "client_handle=0x"
-  };
-
-  int const handle_marker_pos =
-      line.indexOf(handle_marker);
-
-  if (handle_marker_pos < 0)
-    {
-      return;
-    }
-
-  int const handle_start =
-      handle_marker_pos
-      + handle_marker.size();
-
-  int handle_end =
-      line.indexOf(
-          ' ',
-          handle_start);
-
-  if (handle_end < 0)
-    {
-      handle_end =
-          line.size();
-    }
-
-  bool handle_ok = false;
-
-  quint32 const status_handle =
-      QString::fromLatin1(
-          line.mid(
-              handle_start,
-              handle_end - handle_start))
-          .toUInt(
-              &handle_ok,
-              16);
-
-  if (
-      !handle_ok
-      || status_handle != client_handle_)
     {
       return;
     }
@@ -262,66 +439,199 @@ void NativeFlexTransceiver::capture_owned_slice(
               10);
 
   if (
-      slice_ok
-      && status_slice >= 0)
+      !slice_ok
+      || status_slice < 0)
     {
-      slice_id_ =
-          status_slice;
+      return;
+    }
 
-      /*
-       * TransceiverBase::startup() does not automatically call
-       * do_frequency() after do_start().
-       *
-       * Report the FLEX slice's actual starting frequency so
-       * WSJT has a valid dial-frequency state immediately.
-       */
-      QByteArray const frequency_marker {
-          "RF_frequency="
+  if (smart_sdr_present_)
+    {
+      if (slice_id_ >= 0)
+        {
+          if (status_slice != slice_id_)
+            {
+              return;
+            }
+        }
+      else if (collecting_existing_slices_)
+        {
+          existing_slice_ids_.insert(
+              status_slice);
+
+          /*
+           * DEVIATION from W7PP: snapshot the panadapters too.
+           *
+           * do_stop() removes whatever pan the new slice reported. On
+           * a radio whose panadapters are all already in use - two
+           * slices and two pans, both SmartSDR's - FLEX may attach
+           * WSJT's new slice to an EXISTING pan rather than create
+           * one, and the donor's cleanup then deletes the SmartSDR
+           * operator's display. Anything seen here predates WSJT's
+           * slice, so it is never ours to remove.
+           */
+          {
+            quint32 pan = 0;
+
+            if (parse_panadapter_id(line, pan))
+              {
+                existing_panadapter_ids_.insert(pan);
+              }
+          }
+
+          /*
+           * DEVIATION from W7PP: match " tx=1" with its leading
+           * space.
+           *
+           * Slice status fields are space-separated, and a slice line
+           * also carries dax_tx=1. The donor's bare "tx=1" match
+           * therefore latches a slice that is NOT the TX slice, and
+           * that id is later sent back to the radio as
+           * "slice s <n> tx=1" by do_stop() and by the un-key path -
+           * an active mutation of SmartSDR's state, not a read.
+           */
+          if (line.contains(" tx=1"))
+            {
+              previous_tx_slice_id_ =
+                  status_slice;
+            }
+
+          return;
+        }
+      else if (creating_slice_)
+        {
+          if (existing_slice_ids_.contains(
+                  status_slice))
+            {
+              return;
+            }
+
+          slice_id_ =
+              status_slice;
+        }
+      else
+        {
+          return;
+        }
+    }
+  else
+    {
+      QByteArray const handle_marker {
+          "client_handle=0x"
       };
 
-      int const frequency_marker_pos =
-          line.indexOf(frequency_marker);
+      int const handle_marker_pos =
+          line.indexOf(handle_marker);
 
-      if (frequency_marker_pos >= 0)
+      if (handle_marker_pos < 0)
         {
-          int const frequency_start =
-              frequency_marker_pos
-              + frequency_marker.size();
+          return;
+        }
 
-          int frequency_end =
-              line.indexOf(
-                  ' ',
-                  frequency_start);
+      int const handle_start =
+          handle_marker_pos
+          + handle_marker.size();
 
-          if (frequency_end < 0)
-            {
-              frequency_end =
-                  line.size();
-            }
+      int handle_end =
+          line.indexOf(
+              ' ',
+              handle_start);
 
-          bool frequency_ok = false;
+      if (handle_end < 0)
+        {
+          handle_end =
+              line.size();
+        }
 
-          double const frequency_mhz =
-              QString::fromLatin1(
-                  line.mid(
-                      frequency_start,
-                      frequency_end - frequency_start))
-                  .toDouble(
-                      &frequency_ok);
+      bool handle_ok = false;
 
-          if (
-              frequency_ok
-              && frequency_mhz > 0.0)
-            {
-              Frequency const frequency_hz =
-                  static_cast<Frequency>(
-                      frequency_mhz
-                      * 1000000.0
-                      + 0.5);
+      quint32 const status_handle =
+          QString::fromLatin1(
+              line.mid(
+                  handle_start,
+                  handle_end - handle_start))
+              .toUInt(
+                  &handle_ok,
+                  16);
 
-              update_rx_frequency(
-                  frequency_hz);
-            }
+      if (
+          !handle_ok
+          || status_handle != client_handle_)
+        {
+          return;
+        }
+
+      slice_id_ =
+          status_slice;
+    }
+
+  /*
+   * In SmartSDR coexistence mode, remember the panadapter
+   * attached to W7PP's exact newly-created slice so shutdown
+   * can remove the extra SmartSDR display cleanly.
+   */
+  {
+    quint32 pan = 0;
+
+    if (parse_panadapter_id(line, pan))
+      {
+        slice_panadapter_id_ =
+            pan;
+      }
+  }
+  /*
+   * TransceiverBase::startup() does not automatically call
+   * do_frequency() after do_start().
+   *
+   * Report the FLEX slice's actual starting frequency so
+   * WSJT has a valid dial-frequency state immediately.
+   */
+  QByteArray const frequency_marker {
+      "RF_frequency="
+  };
+
+  int const frequency_marker_pos =
+      line.indexOf(frequency_marker);
+
+  if (frequency_marker_pos >= 0)
+    {
+      int const frequency_start =
+          frequency_marker_pos
+          + frequency_marker.size();
+
+      int frequency_end =
+          line.indexOf(
+              ' ',
+              frequency_start);
+
+      if (frequency_end < 0)
+        {
+          frequency_end =
+              line.size();
+        }
+
+      bool frequency_ok = false;
+
+      double const frequency_mhz =
+          QString::fromLatin1(
+              line.mid(
+                  frequency_start,
+                  frequency_end - frequency_start))
+              .toDouble(
+                  &frequency_ok);
+
+      if (
+          frequency_ok
+          && frequency_mhz > 0.0)
+        {
+          Frequency const frequency_hz =
+              static_cast<Frequency>(
+                  frequency_mhz
+                  * 1000000.0
+                  + 0.5);
+
+          update_rx_frequency(
+              frequency_hz);
         }
     }
 }
@@ -359,8 +669,8 @@ void NativeFlexTransceiver::capture_dax_tx_stream(
     }
 
   /*
-   * DEVIATION from W7PP: only accept a dax_tx stream that belongs to
-   * THIS API client.
+   * DEVIATION from W7PP (v1.05.8; adopted upstream in v1.09.1): only
+   * accept a dax_tx stream that belongs to THIS API client.
    *
    * The status-handle test above is not an ownership test: the "S<handle>|"
    * prefix is the handle of the subscriber being notified - i.e. always our
@@ -573,58 +883,6 @@ void NativeFlexTransceiver::capture_transmit_status(
           QVariant::fromValue(value));
     }
 
-  /*
-   * W7PP 
-   *
-   * Evidence only.
-   *
-   * Write the most recent FLEX transmitter status
-   * received by this Native FLEX client.
-   *
-   * This sends NO command to the radio.
-   */
-  QFile evidence {
-      QCoreApplication::applicationDirPath() +
-      QStringLiteral("/W7PP_NATIVE_FLEX_TX_STATUS.txt")
-  };
-
-  if (evidence.open(
-          QIODevice::WriteOnly
-          | QIODevice::Truncate
-          | QIODevice::Text))
-    {
-      QTextStream out {&evidence};
-
-      out << "raw="
-          << QString::fromLatin1(payload)
-          << '\n';
-
-      out << "max_internal_pa_power="
-          << app->property(
-                 "W7PPNativeFlexMaxInternalPaPower")
-                 .toString()
-          << '\n';
-
-      out << "max_power_level="
-          << app->property(
-                 "W7PPNativeFlexMaxPowerLevel")
-                 .toString()
-          << '\n';
-
-      out << "rfpower="
-          << app->property(
-                 "W7PPNativeFlexRfPower")
-                 .toString()
-          << '\n';
-
-      out << "tx_rf_power_changes_allowed="
-          << app->property(
-                 "W7PPNativeFlexRfPowerChangesAllowed")
-                 .toString()
-          << '\n';
-
-      evidence.close();
-    }
 }
 
 void NativeFlexTransceiver::capture_gain_status(
@@ -787,6 +1045,90 @@ void NativeFlexTransceiver::capture_gain_status(
  * addressed a slice that no longer existed and came back
  * 0x5000000D "Invalid slice receiver".
  */
+/*
+ * DEVIATION from W7PP: bounded status-stream drain.
+ *
+ * send_command() returns as soon as it sees the "R<seq>|" line for
+ * the command it sent. FLEX does not guarantee that a subscription's
+ * status dump precedes that response, so a caller that reads state
+ * captured from the status stream the instant send_command() returns
+ * can read it too early. This helper gives the radio a bounded window
+ * to deliver those lines, feeding each one to the same capture set the
+ * three wait loops use.
+ *
+ * FlexVitaReceiver does exactly this on the RX side: it calls
+ * listenTcpFor(tcp, 1500ms) after its own "sub ..." subscriptions
+ * before relying on what they reported.
+ */
+void NativeFlexTransceiver::drain_control_lines(int ms)
+{
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < ms)
+    {
+      if (control_socket_->bytesAvailable() == 0)
+        {
+          control_socket_->waitForReadyRead(250);
+        }
+
+      if (QAbstractSocket::ConnectedState
+          != control_socket_->state())
+        {
+          throw std::runtime_error {
+              "Native FLEX TCP closed while draining status."
+          };
+        }
+
+      if (control_socket_->bytesAvailable() > 0)
+        {
+          pending_control_ += control_socket_->readAll();
+        }
+
+      while (true)
+        {
+          int const cr = pending_control_.indexOf('\r');
+          int const lf = pending_control_.indexOf('\n');
+          int end = -1;
+
+          if (cr >= 0)
+            {
+              end = cr;
+            }
+
+          if (lf >= 0 && (end < 0 || lf < end))
+            {
+              end = lf;
+            }
+
+          if (end < 0)
+            {
+              break;
+            }
+
+          QByteArray line =
+              pending_control_.left(end);
+
+          pending_control_.remove(0, end + 1);
+
+          while (!pending_control_.isEmpty()
+              && ('\r' == pending_control_.at(0)
+                  || '\n' == pending_control_.at(0)))
+            {
+              pending_control_.remove(0, 1);
+            }
+
+          line = line.trimmed();
+
+          capture_smart_sdr_client(line);
+          capture_owned_slice(line);
+          capture_dax_tx_stream(line);
+          capture_transmit_status(line);
+          capture_gain_status(line);
+        }
+    }
+}
+
 void NativeFlexTransceiver::wait_for_owned_slice()
 {
   QElapsedTimer timer;
@@ -848,6 +1190,7 @@ void NativeFlexTransceiver::wait_for_owned_slice()
 
           line = line.trimmed();
 
+          capture_smart_sdr_client(line);
           capture_owned_slice(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
@@ -858,7 +1201,9 @@ void NativeFlexTransceiver::wait_for_owned_slice()
   if (slice_id_ < 0)
     {
       throw std::runtime_error {
-          "Native FLEX reported no WSJT-owned slice."
+          smart_sdr_present_
+              ? "Native FLEX reported no new W7PP SmartSDR coexistence slice."
+              : "Native FLEX reported no WSJT-owned slice."
       };
     }
 }
@@ -924,8 +1269,8 @@ void NativeFlexTransceiver::wait_for_dax_tx_stream()
 
           line = line.trimmed();
 
+          capture_smart_sdr_client(line);
           capture_owned_slice(line);
-          capture_dax_tx_stream(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
           capture_gain_status(line);
@@ -1055,6 +1400,7 @@ QByteArray NativeFlexTransceiver::send_command(
 
           line = line.trimmed();
 
+          capture_smart_sdr_client(line);
           capture_owned_slice(line);
           capture_dax_tx_stream(line);
           capture_transmit_status(line);
@@ -1148,17 +1494,7 @@ int NativeFlexTransceiver::do_start()
    * Native FLEX only.
    * Clear any stale TX route before establishing this session.
    */
-  if (QCoreApplication::instance())
-    {
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxRadioAddress",
-          QString {});
-
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxStreamId",
-          QVariant::fromValue(
-              static_cast<qulonglong>(0)));
-    }
+  publish_native_flex_tx_route(QString {}, 0);
   /*
    * 
    *
@@ -1183,12 +1519,22 @@ int NativeFlexTransceiver::do_start()
   pending_control_.clear();
   api_version_.clear();
   gui_client_id_.clear();
+  smart_sdr_client_id_.clear();
+  cached_tx_rf_power_level_ = -1;
+  smart_sdr_present_ = false;
+  collecting_clients_ = false;
+  collecting_existing_slices_ = false;
+  creating_slice_ = false;
+  existing_slice_ids_.clear();
+  existing_panadapter_ids_.clear();
 
   client_handle_ = 0;
   have_client_handle_ = false;
 
-  next_sequence_ = 2;
+  next_sequence_ = 1;
   slice_id_ = -1;
+  previous_tx_slice_id_ = -1;
+  slice_panadapter_id_ = 0;
   dax_tx_stream_id_ = 0;
 
   control_socket_->connectToHost(
@@ -1354,241 +1700,165 @@ int NativeFlexTransceiver::do_start()
     }
 
   /*
-   * Headless Native FLEX ownership.
+   * SmartSDR coexistence decision.
    *
-   * Register WSJT-X itself as a FLEX GUI/API client.
+   * First inspect the clients already attached to the radio.
    *
-   * This does NOT involve SmartSDR.
+   * If a GUI client (SmartSDR-Win, SmartSDR-Mac, AetherSDR, ...)
+   * is present, W7PP remains a non-GUI API client.  It snapshots
+   * all existing slices, creates one additional slice, and
+   * captures only that new slice number.
    *
-   * FLEX resources that we create later, including our
-   * operating slice, will belong to this WSJT-X client.
+   * If no GUI client is present, preserve the accepted headless
+   * client-gui ownership path.
    */
-  QByteArray const gui_command {
-      "C1|client gui\r\n"
-  };
+  collecting_clients_ = true;
 
-  qint64 const queued =
-      control_socket_->write(
-          gui_command);
-
-  if (queued != gui_command.size())
+  try
     {
-      control_socket_->abort();
+      send_command(
+          QString {
+              "sub client all"
+          });
 
-      throw std::runtime_error {
-          "Native FLEX failed to queue client gui command."
-      };
+      /*
+       * DEVIATION from W7PP: let the client dump arrive before
+       * deciding.
+       *
+       * The donor reads smart_sdr_present_ the instant send_command()
+       * returns, i.e. on the "R<seq>|" line. If the radio trails its
+       * client status lines after that response, SmartSDR goes
+       * undetected and the headless "client gui" path runs against a
+       * radio that has SmartSDR up. Drain first (see
+       * drain_control_lines()).
+       */
+      drain_control_lines(750);
+    }
+  catch (...)
+    {
+      collecting_clients_ = false;
+      throw;
     }
 
-  if (!control_socket_->waitForBytesWritten(2000))
+  collecting_clients_ = false;
+
+  if (smart_sdr_present_)
     {
-      control_socket_->abort();
-
-      throw std::runtime_error {
-          "Native FLEX failed to send client gui command."
-      };
-    }
-
-  bool gui_response_received = false;
-
-  QElapsedTimer gui_timer;
-  gui_timer.start();
-
-  while (
-      gui_timer.elapsed() < 5000
-      && !gui_response_received)
-    {
-      if (control_socket_->bytesAvailable() == 0)
+      /*
+       * Defensive only: capture_smart_sdr_client() now sets
+       * smart_sdr_present_ solely when it also has a non-empty
+       * client id, so present implies a usable id. Kept because an
+       * unbound "client bind client_id=" would be worse than a
+       * clear failure.
+       */
+      if (smart_sdr_client_id_.isEmpty())
         {
-          control_socket_->waitForReadyRead(250);
+          throw std::runtime_error {
+              "Native FLEX found SmartSDR but received no SmartSDR client_id."
+          };
         }
 
-      if (
-          QAbstractSocket::ConnectedState
-          != control_socket_->state())
+      send_command(
+          QString {
+              "client bind client_id=%1"
+          }
+          .arg(smart_sdr_client_id_));
+
+      existing_slice_ids_.clear();
+      collecting_existing_slices_ = true;
+
+      try
+        {
+          send_command(
+              QString {
+                  "sub slice all"
+              });
+
+          /*
+           * DEVIATION from W7PP: let the slice dump arrive before
+           * closing the snapshot.
+           *
+           * Same response-ordering race as above, and worse here: if
+           * existing_slice_ids_ is still empty when creating_slice_
+           * opens, the first PRE-EXISTING slice status consumed inside
+           * the create window is mistaken for W7PP's new slice - and
+           * do_stop() then destroys SmartSDR's slice with "slice r".
+           */
+          drain_control_lines(750);
+        }
+      catch (...)
+        {
+          collecting_existing_slices_ = false;
+          throw;
+        }
+
+      collecting_existing_slices_ = false;
+      creating_slice_ = true;
+
+      try
+        {
+          send_command(
+              QString {
+                  "slice create mode=digu"
+              });
+
+          /*
+           * DEVIATION from W7PP: the donor re-issues "sub slice all"
+           * once if the create response beat the slice status. This
+           * fork's wait_for_owned_slice() already waits on the status
+           * stream for that race (see its comment), so use it here
+           * too; the create gate stays open for the whole wait.
+           */
+          wait_for_owned_slice();
+        }
+      catch (...)
+        {
+          creating_slice_ = false;
+          throw;
+        }
+
+      creating_slice_ = false;
+    }
+  else
+    {
+      /*
+       * Headless Native FLEX ownership.
+       *
+       * Register WSJT-X itself as a FLEX GUI/API client.
+       */
+      gui_client_id_ =
+          QString::fromLatin1(
+              send_command(
+                  QString {
+                      "client gui"
+                  }))
+              .trimmed();
+
+      if (gui_client_id_.isEmpty())
         {
           control_socket_->abort();
 
           throw std::runtime_error {
-              "Native FLEX TCP closed while registering GUI client."
+              "Native FLEX client gui returned no client_id."
           };
         }
 
-      if (control_socket_->bytesAvailable() > 0)
-        {
-          pending_control_ +=
-              control_socket_->readAll();
-        }
-
-      while (true)
-        {
-          int const cr =
-              pending_control_.indexOf('\r');
-
-          int const lf =
-              pending_control_.indexOf('\n');
-
-          int end = -1;
-
-          if (cr >= 0)
-            {
-              end = cr;
-            }
-
-          if (lf >= 0)
-            {
-              if (end < 0 || lf < end)
-                {
-                  end = lf;
-                }
-            }
-
-          if (end < 0)
-            {
-              break;
-            }
-
-          QByteArray line =
-              pending_control_.left(end);
-
-          pending_control_.remove(
-              0,
-              end + 1);
-
-          while (
-              !pending_control_.isEmpty()
-              && ('\r' == pending_control_.at(0)
-                  || '\n' == pending_control_.at(0)))
-            {
-              pending_control_.remove(0, 1);
-            }
-
-          line = line.trimmed();
-
-          capture_owned_slice(line);
-          capture_dax_tx_stream(line);
-          capture_transmit_status(line);
-          capture_gain_status(line);
-
-          if (!line.startsWith("R1|"))
-            {
-              continue;
-            }
-
-          auto const fields =
-              line.split('|');
-
-          if (fields.size() < 3)
-            {
-              control_socket_->abort();
-
-              throw std::runtime_error {
-                  "Native FLEX client gui response is malformed."
-              };
-            }
-
-          bool response_ok = false;
-
-          quint32 const response_code =
-              QString::fromLatin1(
-                  fields.at(1))
-                  .toUInt(
-                      &response_ok,
-                      16);
-
-          if (!response_ok)
-            {
-              control_socket_->abort();
-
-              throw std::runtime_error {
-                  "Native FLEX client gui response code is malformed."
-              };
-            }
-
-          if (0 != response_code)
-            {
-              /*
-               * DEVIATION from W7PP: surface the radio's explanation.
-               * 0xF3000001 is "The maximum number of connected clients
-               * has been reached" - the operator needs that, not a bare
-               * hex code.
-               */
-              QString const detail =
-                  QString::fromLatin1(
-                      fields.mid(2).join('|')).trimmed();
-
-              QString const message =
-                  QString {
-                      "Native FLEX client gui failed: response 0x%1%2"
-                  }
-                  .arg(
-                      response_code,
-                      8,
-                      16,
-                      QLatin1Char('0'))
-                  .arg(
-                      detail.isEmpty()
-                      ? QString {}
-                      : QString {" - "} + detail);
-
-              control_socket_->abort();
-
-              throw std::runtime_error {
-                  message.toStdString()
-              };
-            }
-
-          gui_client_id_ =
-              QString::fromLatin1(
-                  fields.at(2))
-                  .trimmed();
-
-          if (gui_client_id_.isEmpty())
-            {
-              control_socket_->abort();
-
-              throw std::runtime_error {
-                  "Native FLEX client gui returned no client_id."
-              };
-            }
-
-          gui_response_received = true;
-          break;
-        }
-    }
-
-  if (!gui_response_received)
-    {
-      control_socket_->abort();
-
-      throw std::runtime_error {
-          "Native FLEX client gui response timed out."
-      };
-    }
-
-  /*
-   * client gui may restore an existing slice for this client.
-   *
-   * If FLEX already reported one owned by our client handle,
-   * use it.  Do NOT create an unnecessary second slice.
-   */
-  if (slice_id_ < 0)
-    {
       /*
-       * No restored slice was reported.
+       * client gui may restore an existing slice for this client.
        *
-       * Request one.  The successful command response may
-       * contain no data; the assigned slice number arrives in
-       * the FLEX slice status stream and capture_owned_slice()
-       * records it.
+       * If FLEX already reported one owned by our client handle,
+       * use it.  Do NOT create an unnecessary second slice.
        */
-      send_command(
-          QString {
-              "slice create mode=digu"
-          });
-    }
+      if (slice_id_ < 0)
+        {
+          send_command(
+              QString {
+                  "slice create mode=digu"
+              });
+        }
 
-  wait_for_owned_slice();
+      wait_for_owned_slice();
+    }
 
   /*
    * Native WSJT operation always uses DIGU.
@@ -1632,11 +1902,14 @@ int NativeFlexTransceiver::do_start()
    * No xmit command is sent here.
    * No VITA TX packets are sent here.
    */
-  send_command(
-      QString {
-          "slice s %1 tx=1 mode=digu"
-      }
-      .arg(slice_id_));
+  if (!smart_sdr_present_)
+    {
+      send_command(
+          QString {
+              "slice s %1 tx=1 mode=digu"
+          }
+          .arg(slice_id_));
+    }
 
   send_command(
       QString {
@@ -1689,6 +1962,21 @@ int NativeFlexTransceiver::do_start()
       });
 
   wait_for_dax_tx_stream();
+
+  /*
+   * W7PP SmartSDR coexistence:
+   *
+   * The DAX-TX stream above is owned by THIS Native FLEX
+   * API client even when its slice is bound to SmartSDR's
+   * GUI client. Explicitly select this exact stream as
+   * the radio TX sample source.
+   *
+   * This changes only FLEX stream attachment/state.
+   * Native VITA packet/sample transport is unchanged.
+   */
+  send_command(
+      QStringLiteral("stream set 0x%1 tx=1")
+          .arg(dax_tx_stream_id_, 0, 16));
   /*
    * W7PP 
    *
@@ -1700,18 +1988,7 @@ int NativeFlexTransceiver::do_start()
    *
    * No UDP socket or packet transmission is created here.
    */
-  if (QCoreApplication::instance())
-    {
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxRadioAddress",
-          radio.address);
-
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxStreamId",
-          QVariant::fromValue(
-              static_cast<qulonglong>(
-                  dax_tx_stream_id_)));
-    }
+  publish_native_flex_tx_route(radio.address, dax_tx_stream_id_);
 
   /*
    * W7PP :
@@ -1767,11 +2044,24 @@ void NativeFlexTransceiver::do_stop()
    *
    * Best-effort radio unkey before control-socket teardown.
    * Safety telemetry is then stopped independently.
+   *
+   * DEVIATION from W7PP: in coexistence, unkey only if WSJT is the
+   * one keyed.
+   *
+   * "xmit" is radio-global, not per-client: a bound client's "xmit 0"
+   * cuts whatever the SmartSDR operator is transmitting. The donor's
+   * unconditional form therefore drops the other operator's carrier
+   * every time WSJT-Z exits, restarts the rig, or fails a start after
+   * "client bind". state().ptt() is set true only by the key-up path
+   * in do_ptt(), so it marks the shutdowns that have something of our
+   * own to unkey. Headless is unchanged: there nobody else can be on
+   * the air, and the unconditional unkey is the safer default.
    */
   if (
       control_socket_
       && QAbstractSocket::ConnectedState
-          == control_socket_->state())
+          == control_socket_->state()
+      && (!smart_sdr_present_ || state().ptt()))
     {
       try
         {
@@ -1786,6 +2076,36 @@ void NativeFlexTransceiver::do_stop()
         }
     }
 
+  /*
+   * W7PP SmartSDR coexistence cleanup.
+   *
+   * Remove only the DAX-TX stream created by THIS
+   * Native FLEX session while its control socket is
+   * still connected.  The existing slice cleanup below
+   * remains authoritative for the W7PP-owned slice.
+   *
+   * Native VITA RX/TX transport is not changed here.
+   */
+  if (
+      dax_tx_stream_id_ != 0
+      && control_socket_
+      && QAbstractSocket::ConnectedState
+          == control_socket_->state())
+    {
+      try
+        {
+          send_command(
+              QStringLiteral("stream remove 0x%1")
+                  .arg(dax_tx_stream_id_, 0, 16));
+        }
+      catch (...)
+        {
+          // Best effort cleanup. Shutdown still proceeds.
+        }
+    }
+
+  dax_tx_stream_id_ = 0;
+
   update_PTT(false);
   safety_monitor_.stop();
   /*
@@ -1793,17 +2113,7 @@ void NativeFlexTransceiver::do_stop()
    *
    * This Native FLEX session no longer owns a TX route.
    */
-  if (QCoreApplication::instance())
-    {
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxRadioAddress",
-          QString {});
-
-      QCoreApplication::instance()->setProperty(
-          "W7PPNativeFlexTxStreamId",
-          QVariant::fromValue(
-              static_cast<qulonglong>(0)));
-    }
+  publish_native_flex_tx_route(QString {}, 0);
   /*
    * Remove the slice created and owned by this WSJT session.
    */
@@ -1829,6 +2139,78 @@ void NativeFlexTransceiver::do_stop()
 
   slice_id_ = -1;
 
+  /*
+   * SmartSDR coexistence:
+   *
+   * W7PP temporarily made its own slice the radio TX slice.
+   * If a different TX slice existed before W7PP started,
+   * restore that exact slice before disconnecting.
+   *
+   * This restores pre-W7PP radio state only.  It does not
+   * arbitrate TX ownership or key the transmitter.
+   */
+  if (
+      smart_sdr_present_
+      && previous_tx_slice_id_ >= 0
+      && control_socket_
+      && QAbstractSocket::ConnectedState
+          == control_socket_->state())
+    {
+      try
+        {
+          send_command(
+              QString {
+                  "slice s %1 tx=1"
+              }
+              .arg(previous_tx_slice_id_));
+        }
+      catch (...)
+        {
+          // Best effort state restoration. Shutdown continues.
+        }
+    }
+
+  previous_tx_slice_id_ = -1;
+
+  /*
+   * SmartSDR can retain the extra panadapter after W7PP's
+   * coexistence slice is removed.  Remove only the panadapter
+   * captured from W7PP's exact slice.
+   *
+   * DEVIATION from W7PP: never remove a panadapter that already
+   * existed when the slice snapshot was taken. FLEX can attach the
+   * new coexistence slice to a pre-existing pan instead of creating
+   * one - on a 2-slice/2-pan radio with SmartSDR holding both, it
+   * must - and removing that one deletes the SmartSDR operator's
+   * display.
+   */
+  if (
+      smart_sdr_present_
+      && slice_panadapter_id_ != 0
+      && !existing_panadapter_ids_.contains(slice_panadapter_id_)
+      && control_socket_
+      && QAbstractSocket::ConnectedState
+          == control_socket_->state())
+    {
+      try
+        {
+          send_command(
+              QString {
+                  "display pan remove 0x%1"
+              }
+              .arg(
+                  slice_panadapter_id_,
+                  0,
+                  16));
+        }
+      catch (...)
+        {
+          // Best effort cleanup. Socket shutdown still proceeds.
+        }
+    }
+
+  slice_panadapter_id_ = 0;
+
   if (control_socket_)
     {
       if (
@@ -1851,12 +2233,21 @@ void NativeFlexTransceiver::do_stop()
   pending_control_.clear();
   api_version_.clear();
   gui_client_id_.clear();
+  smart_sdr_client_id_.clear();
+  cached_tx_rf_power_level_ = -1;
+  smart_sdr_present_ = false;
+  collecting_clients_ = false;
+  collecting_existing_slices_ = false;
+  creating_slice_ = false;
+  existing_slice_ids_.clear();
+  existing_panadapter_ids_.clear();
 
   client_handle_ = 0;
   have_client_handle_ = false;
 
-  next_sequence_ = 2;
+  next_sequence_ = 1;
   slice_id_ = -1;
+  previous_tx_slice_id_ = -1;
 }
 
 void NativeFlexTransceiver::do_frequency(
@@ -2043,6 +2434,23 @@ void NativeFlexTransceiver::do_ptt(bool on)
         }
       try
         {
+          if (smart_sdr_present_)
+            {
+              send_command(
+                  QString {
+                      "slice s %1 tx=1 mode=digu"
+                  }
+                  .arg(slice_id_));
+
+              if (cached_tx_rf_power_level_ >= 0)
+                {
+                  send_command(
+                      QStringLiteral(
+                          "transmit set rfpower=%1")
+                          .arg(cached_tx_rf_power_level_));
+                }
+            }
+
           send_command(
               QString {
                   "xmit 1"
@@ -2071,6 +2479,12 @@ void NativeFlexTransceiver::do_ptt(bool on)
                */
             }
 
+          if (smart_sdr_present_ && previous_tx_slice_id_ >= 0)
+            {
+              try { send_command(QString {"slice s %1 tx=1"}.arg(previous_tx_slice_id_)); }
+              catch (...) {}
+            }
+
           update_PTT(false);
           throw;
         }
@@ -2084,18 +2498,53 @@ void NativeFlexTransceiver::do_ptt(bool on)
    *
    * If the radio acknowledgement fails, local PTT is
    * still cleared before the failure is propagated.
+   *
+   * DEVIATION from W7PP: in coexistence, unkey only when this un-key
+   * actually follows a key-up - the same conservatism as the TX-slice
+   * restore below.
+   *
+   * "xmit" is radio-global, so a bound client's "xmit 0" cuts whatever
+   * the SmartSDR operator is transmitting. TransceiverBase::shutdown()
+   * calls do_ptt(false) unconditionally whenever the rig is online,
+   * keyed or not, so the donor's unguarded form takes the other
+   * operator off the air on every WSJT-Z exit. A session that never
+   * keyed has nothing of its own to unkey. Headless is unchanged.
    */
-  try
+  if (!smart_sdr_present_ || state().ptt())
     {
-      send_command(
-          QString {
-              "xmit 0"
-          });
+      try
+        {
+          send_command(
+              QString {
+                  "xmit 0"
+              });
+        }
+      catch (...)
+        {
+          update_PTT(false);
+          throw;
+        }
     }
-  catch (...)
+
+  /*
+   * DEVIATION from W7PP: restore only when this un-key actually
+   * follows a key-up.
+   *
+   * TransceiverBase::shutdown() calls do_ptt(false) unconditionally
+   * whenever the rig is online, keyed or not. A session that never
+   * keyed never took SmartSDR's TX slice, so the donor's unguarded
+   * form writes "slice s <n> tx=1" to a radio whose TX slice this
+   * session never touched: a mutation of somebody else's state with
+   * nothing to undo. state().ptt() is set true only by the key-up
+   * path above, so it marks the un-keys that have something to give
+   * back. When the shutdown does happen while keyed, the restore
+   * still runs here and do_stop() repeats it - restoring a TX slice
+   * that is already the TX slice is a no-op.
+   */
+  if (state().ptt() && smart_sdr_present_ && previous_tx_slice_id_ >= 0)
     {
-      update_PTT(false);
-      throw;
+      try { send_command(QString {"slice s %1 tx=1"}.arg(previous_tx_slice_id_)); }
+      catch (...) {}
     }
 
   update_PTT(false);

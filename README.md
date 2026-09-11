@@ -5,7 +5,7 @@
 <h1 align="center">WSJT-Z — Native FLEX (VITA-49)</h1>
 
 <p align="center">
-  <strong>Talk to a FlexRadio directly. No SmartSDR. No DAX. No other client running.</strong>
+  <strong>Talk to a FlexRadio directly. No DAX. No CAT shim. SmartSDR optional.</strong>
 </p>
 
 <p align="center">
@@ -36,7 +36,7 @@ Native FLEX removes the entire stack:
 
 |                          | Conventional          | Native FLEX     |
 | ------------------------ | --------------------- | --------------- |
-| SmartSDR running         | required              | **not needed**  |
+| SmartSDR (Windows / Mac) | required              | **optional**    |
 | DAX virtual audio driver | required              | **not needed**  |
 | Virtual audio routing    | required              | **not needed**  |
 | Separate CAT path        | required              | **not needed**  |
@@ -46,8 +46,16 @@ Select **`Flex Native VITA-49`** as the radio, pick your DAX channel, choose the
 prompted, and that is the whole setup. WSJT-Z finds the radio by UDP discovery, opens the
 SmartSDR API, creates its slice, and streams audio itself.
 
-It genuinely runs headless. In fact it works *better* with SmartSDR closed — a second client
-competes for the radio's limited client slots and for ownership of the transmit slice.
+It runs headless: with no other client connected, WSJT-Z registers as the radio's GUI
+client and owns its slice outright.
+
+If a **GUI client** is already running — SmartSDR for Windows or Mac, AetherSDR, anything
+that registered with the radio as a GUI client — WSJT-Z coexists with it instead of
+competing. It binds to that client, creates one extra slice for itself, and only takes the
+transmit slice for the duration of each transmission — the slice you were transmitting on
+in the GUI is restored on unkey and at shutdown, and the extra panadapter is removed. This
+follows W7PP Mods v1.09.1, widened: the donor engaged only on `program=SmartSDR-Win`, while
+this fork engages for any connected GUI client, whatever it calls itself.
 
 ## How it works
 
@@ -76,6 +84,7 @@ Working and used on the air:
 - **Transmit** — confirmed two-way QSO (F4JZW → LW2EDM, 20 m FT8, RR73)
 - **CAT** — slice creation, frequency, mode, PTT, and a TX safety interlock that refuses to
   key when the radio reports transmit is not permitted
+- **GUI client coexistence** — start with SmartSDR (Windows or Mac) or another GUI client open or closed; either way the radio ends up as you left it
 - **RF power** — the power slider sets the radio's RF output (watts, scaled to the PA
   capability the radio reports); disabled when the radio reports power changes are not
   permitted
@@ -87,8 +96,20 @@ Verified on a **FLEX-8400M**, SmartSDR 3.1.0.4, firmware 4.2.20.41343, on macOS.
 
 ### Known limitations
 
-- **You need a free client slot.** If the radio reports *"maximum number of connected clients
-  has been reached"*, close another client (SmartSDR, or another API client) first.
+- **Headless mode needs a free client slot and a free slice.** With no GUI client
+  connected WSJT-Z takes a client slot of its own: if the radio reports *"maximum number of
+  connected clients has been reached"*, or if `slice create` fails, close another API
+  client first. With a GUI client running, WSJT-Z binds to it rather than taking a slot of
+  its own.
+- **Coexistence needs a free slice.** On a 2-slice radio, the GUI client has to leave one
+  slice unused; WSJT-Z creates its own on top of whatever is already there.
+- **`transmit set dax=1` is global and is not restored.** Both modes set the radio-wide
+  `transmit set dax=1` at start and leave it that way at exit, so with a GUI client running
+  your own transmissions take DAX audio for as long as WSJT-Z is up and until you switch
+  it back by hand. Restoring the previous value needs the `dax=` field of the radio's
+  `transmit` status checked against live hardware first.
+- Coexistence has been exercised against a scripted radio (`test_native_flex_transceiver`),
+  not yet on the air from this fork.
 - Tested only on an 8000-series radio so far. The donor was developed against 6000-series.
 
 ## Build (macOS)
@@ -106,6 +127,7 @@ Tests:
 ./build/tests/test_flex_socket_compat     # POSIX/Winsock shim
 ./build/tests/test_flex_vita_receiver     # VITA-49 receive, against a fake radio
 ./build/tests/test_native_flex_factory    # rig registration
+./build/tests/test_native_flex_transceiver # start/stop command sequences, headless and GUI-client coexistence, against a fake radio
 ```
 
 `test_flex_vita_receiver` stands up a loopback SmartSDR handshake and feeds synthetic VITA-49
@@ -130,7 +152,8 @@ GPLv3. This work stands on three others:
   Development Group.
 - **[WSJT-Z](https://github.com/sq9fve/wsjt-z)** — **SQ9FVE**. This fork tracks WSJT-Z 2.0.19;
   its original README is preserved as [README-WSJT-Z.md](README-WSJT-Z.md).
-- **W7PP Mods** — Dick Hale **W7PP**, from *WSJT-X v3.0.2 W7PP Mods v1.05.8 RC3*. The Native
+- **W7PP Mods** — Dick Hale **W7PP**, from *WSJT-X v3.0.2 W7PP Mods v1.09.1 RC4* (first
+  imported at v1.05.8 RC3). The Native
   FLEX implementation is his. It is carried here as close to verbatim as portability allowed,
   with every `W7PP` marker intact so it stays diffable against future releases. Deliberate
   changes are marked `DEVIATION from W7PP` with the reason stated at the point of change.

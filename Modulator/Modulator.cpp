@@ -1,11 +1,4 @@
-#include <QCoreApplication>
-#include <QFile>
-#include <QVariant>
-
-namespace
-{
-QFile w7pp_native_flex_tx_capture_file;
-}
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
 
 #include "Modulator.hpp"
 #include <limits>
@@ -67,38 +60,6 @@ void Modulator::start (QString mode, unsigned symbolsLength, double framesPerSym
 
   if(m_state != Idle) stop();
 
-  // W7PP :
-  // Capture only the exact Native FLEX TX PCM stream.
-  if (w7pp_native_flex_tx_capture_file.isOpen())
-    {
-      w7pp_native_flex_tx_capture_file.close();
-    }
-
-  bool const w7pp_native_flex_capture =
-      QCoreApplication::instance()
-      && QCoreApplication::instance()
-             ->property("W7PPNativeFlexTxCapture")
-             .toBool();
-
-  QByteArray const w7pp_capture_path =
-      qgetenv("W7PP_NATIVE_FLEX_TX_CAPTURE_FILE");
-
-  if (w7pp_native_flex_capture
-      && !w7pp_capture_path.isEmpty())
-    {
-      w7pp_native_flex_tx_capture_file.setFileName(
-          QString::fromLocal8Bit(w7pp_capture_path));
-
-      // DEVIATION from W7PP: the donor discarded open()'s return value,
-      // so a bad W7PP_NATIVE_FLEX_TX_CAPTURE_FILE path failed silently --
-      // the operator got neither a capture nor a diagnostic. Log it.
-      if (!w7pp_native_flex_tx_capture_file.open(
-              QIODevice::WriteOnly | QIODevice::Truncate))
-        {
-          qDebug () << "Modulator::start: failed to open Native FLEX TX capture file"
-                     << w7pp_capture_path;
-        }
-    }
   m_quickClose = false;
   m_symbolsLength = symbolsLength;
   m_isym0 = std::numeric_limits<unsigned>::max (); // big number
@@ -189,11 +150,6 @@ void Modulator::close ()
     {
       Q_EMIT stateChanged ((m_state = Idle));
     }
-  if (w7pp_native_flex_tx_capture_file.isOpen())
-    {
-      w7pp_native_flex_tx_capture_file.close();
-    }
-
   AudioDevice::close ();
 }
 
@@ -213,26 +169,6 @@ qint64 Modulator::readData (char * data, qint64 maxSize)
   qint16 * samples (reinterpret_cast<qint16 *> (data));
   qint16 * end (samples + numFrames * (bytesPerFrame () / sizeof (qint16)));
   qint64 framesGenerated (0);
-
-  auto const w7pp_capture_return =
-      [data](qint64 bytes) -> qint64
-      {
-        if (bytes > 0
-            && w7pp_native_flex_tx_capture_file.isOpen())
-          {
-            qint64 const written =
-                w7pp_native_flex_tx_capture_file.write(
-                    data,
-                    bytes);
-
-            if (written != bytes)
-              {
-                w7pp_native_flex_tx_capture_file.close();
-              }
-          }
-
-        return bytes;
-      };
 
 //  if(m_ic==0) qDebug() << "aa" << 0.001*(QDateTime::currentMSecsSinceEpoch() % qint64(1000*m_TRperiod))
 //                       << m_state << m_TRperiod << m_silentFrames << m_ic << foxcom_.wave[m_ic];
@@ -315,7 +251,7 @@ qint64 Modulator::readData (char * data, qint64 maxSize)
               ++m_ic;
             } else {
               Q_EMIT stateChanged ((m_state = Idle));
-              return w7pp_capture_return(framesGenerated * bytesPerFrame ());
+              return framesGenerated * bytesPerFrame ();
             }
 
             // adjust ramp
@@ -325,7 +261,7 @@ qint64 Modulator::readData (char * data, qint64 maxSize)
             }
             m_cwLevel = level;
           }
-          return w7pp_capture_return(framesGenerated * bytesPerFrame ());
+          return framesGenerated * bytesPerFrame ();
         } else {
           bCwId=false;
         } //End of code for CW ID
@@ -408,7 +344,7 @@ qint64 Modulator::readData (char * data, qint64 maxSize)
           if (icw[0] == 0) {
             // no CW ID to send
             Q_EMIT stateChanged ((m_state = Idle));
-            return w7pp_capture_return(framesGenerated * bytesPerFrame ());
+            return framesGenerated * bytesPerFrame ();
           }
           m_phi = 0.0;
         }
@@ -423,7 +359,7 @@ qint64 Modulator::readData (char * data, qint64 maxSize)
             samples = load (0, samples);
             ++framesGenerated;
           }
-        return w7pp_capture_return(framesGenerated * bytesPerFrame ());
+        return framesGenerated * bytesPerFrame ();
       }
       // fall through
 

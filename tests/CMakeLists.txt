@@ -84,6 +84,16 @@ else ()
 endif ()
 add_test (test_flex_band_levels test_flex_band_levels)
 
+add_executable (test_native_flex_transceiver test_native_flex_transceiver.cpp)
+target_include_directories (test_native_flex_transceiver PRIVATE ${CMAKE_BINARY_DIR})
+target_link_libraries (test_native_flex_transceiver wsjt_qt wsjt_cxx Qt5::Test Qt5::Network)
+if ((NOT ${OPENMP_FOUND}) OR APPLE)
+  target_link_libraries (test_native_flex_transceiver wsjt_fort wsjt_cxx)
+else ()
+  target_link_libraries (test_native_flex_transceiver wsjt_fort_omp wsjt_cxx)
+endif ()
+add_test (test_native_flex_transceiver test_native_flex_transceiver)
+
 # The socket-compat shim and the code under test call Winsock
 # directly; the import library is only transitive where Qt5::Network
 # is linked, so name it explicitly for every test that can reach it.
@@ -91,6 +101,7 @@ if (WIN32)
   target_link_libraries (test_flex_socket_compat ws2_32)
   target_link_libraries (test_flex_vita_receiver ws2_32)
   target_link_libraries (test_native_flex_factory ws2_32)
+  target_link_libraries (test_native_flex_transceiver ws2_32)
   target_link_libraries (test_native_flex_selection ws2_32)
   target_link_libraries (test_tx_rf_power_plumbing ws2_32)
   target_link_libraries (test_band_settle_gate ws2_32)
