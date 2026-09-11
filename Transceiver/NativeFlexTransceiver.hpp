@@ -1,7 +1,10 @@
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
+
 #ifndef W7PP_NATIVE_FLEX_TRANSCEIVER_HPP
 #define W7PP_NATIVE_FLEX_TRANSCEIVER_HPP
 
 #include <QByteArray>
+#include <QSet>
 #include <QString>
 #include <QtGlobal>
 
@@ -58,6 +61,7 @@ private:
   void do_slice_af_gain(int) override;
   void do_dax_gain(int, bool) override;
 
+  void capture_smart_sdr_client(QByteArray const& line);
   void capture_owned_slice(QByteArray const& line);
   void capture_dax_tx_stream(QByteArray const& line);
   void capture_transmit_status(QByteArray const& line);
@@ -86,8 +90,17 @@ private:
   quint32 client_handle_ {0};
   bool have_client_handle_ {false};
 
-  quint32 next_sequence_ {2};
+  QString smart_sdr_client_id_ {};
+  int cached_tx_rf_power_level_ {-1};
+  bool smart_sdr_present_ {false};
+  bool collecting_existing_slices_ {false};
+  bool creating_slice_ {false};
+  QSet<int> existing_slice_ids_ {};
+
+  quint32 next_sequence_ {1};
   int slice_id_ {-1};
+  int previous_tx_slice_id_ {-1};
+  quint32 slice_panadapter_id_ {0};
   quint32 dax_tx_stream_id_ {0};
 };
 

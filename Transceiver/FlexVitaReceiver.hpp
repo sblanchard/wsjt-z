@@ -1,3 +1,5 @@
+// W7PP modifications Copyright (C) 2026 Dick Hale / W7PP.
+
 #ifndef W7PP_FLEX_VITA_RECEIVER_HPP
 #define W7PP_FLEX_VITA_RECEIVER_HPP
 
@@ -44,7 +46,7 @@ public:
 
   struct Configuration
   {
-    std::string radioAddress {"192.168.0.246"};
+    std::string radioAddress {};
     unsigned short tcpPort {4992};
     int daxChannel {1};
 
