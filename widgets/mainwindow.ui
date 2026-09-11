@@ -4746,6 +4746,22 @@ list. The list can be maintained in Settings (F2).</string>
                 </property>
                </widget>
               </item>
+              <item>
+               <widget class="QLabel" name="w7ppFlexRfPowerValue">
+                <property name="visible">
+                 <bool>false</bool>
+                </property>
+                <property name="toolTip">
+                 <string>Native FLEX RF power as SmartSDR rfpower percent</string>
+                </property>
+                <property name="text">
+                 <string>-- %</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignCenter</set>
+                </property>
+               </widget>
+              </item>
              </layout>
             </item>
             <item>
