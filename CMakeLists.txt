@@ -80,7 +80,7 @@ set (VERSION_Z "2.0.19")
 # Native FLEX VITA-49 fork build number. Bumped for every release of this
 # fork; VERSION_Z stays the WSJT-Z base it tracks. Release tags are
 # v${VERSION_Z}-flex-vita.${VERSION_FLEX_VITA}.
-set (VERSION_FLEX_VITA "3")
+set (VERSION_FLEX_VITA "4")
 message (STATUS "******************************************************")
 message (STATUS "Building ${PROJECT_BUNDLE_NAME} ${VERSION_Z} Native FLEX VITA-49 build ${VERSION_FLEX_VITA} (base WSJT-X ${PROJECT_VERSION}) for ${CMAKE_SYSTEM_NAME}-${PROJECT_ARCHITECTURE}")
 message (STATUS "******************************************************")
