@@ -5,7 +5,7 @@
 <h1 align="center">WSJT-Z — Native FLEX (VITA-49)</h1>
 
 <p align="center">
-  <strong>Talk to a FlexRadio directly. No DAX. No CAT shim. SmartSDR optional.</strong>
+  <strong>Talk to a FlexRadio directly. No DAX. No CAT shim. SmartSDR for Windows optional.</strong>
 </p>
 
 <p align="center">
@@ -36,7 +36,7 @@ Native FLEX removes the entire stack:
 
 |                          | Conventional          | Native FLEX     |
 | ------------------------ | --------------------- | --------------- |
-| SmartSDR running         | required              | **optional**    |
+| SmartSDR for Windows     | required              | **optional**    |
 | DAX virtual audio driver | required              | **not needed**  |
 | Virtual audio routing    | required              | **not needed**  |
 | Separate CAT path        | required              | **not needed**  |
@@ -49,11 +49,13 @@ SmartSDR API, creates its slice, and streams audio itself.
 It runs headless: with no other client connected, WSJT-Z registers as the radio's GUI
 client and owns its slice outright.
 
-If **SmartSDR** is already running, WSJT-Z coexists with it instead of competing. It binds
-to SmartSDR's client, creates one extra slice for itself, and only takes the transmit
-slice for the duration of each transmission — the slice you were transmitting on in
-SmartSDR is restored on unkey and at shutdown, and the extra panadapter is removed. This
-follows W7PP Mods v1.09.1; it detects `SmartSDR-Win` specifically, as the donor does.
+If **SmartSDR for Windows** is already running, WSJT-Z coexists with it instead of
+competing. It binds to SmartSDR's client, creates one extra slice for itself, and only
+takes the transmit slice for the duration of each transmission — the slice you were
+transmitting on in SmartSDR is restored on unkey and at shutdown, and the extra panadapter
+is removed. This follows W7PP Mods v1.09.1; like the donor, it engages only when the
+connected GUI client reports `program=SmartSDR-Win`. With SmartSDR for Mac, or any other
+GUI client, the headless path runs instead.
 
 ## How it works
 
@@ -82,7 +84,7 @@ Working and used on the air:
 - **Transmit** — confirmed two-way QSO (F4JZW → LW2EDM, 20 m FT8, RR73)
 - **CAT** — slice creation, frequency, mode, PTT, and a TX safety interlock that refuses to
   key when the radio reports transmit is not permitted
-- **SmartSDR coexistence** — start with SmartSDR open or closed; either way the radio ends up as you left it
+- **SmartSDR for Windows coexistence** — start with SmartSDR open or closed; either way the radio ends up as you left it
 - **RF power** — the power slider sets the radio's RF output (watts, scaled to the PA
   capability the radio reports); disabled when the radio reports power changes are not
   permitted
@@ -95,8 +97,19 @@ Verified on a **FLEX-8400M**, SmartSDR 3.1.0.4, firmware 4.2.20.41343, on macOS.
 ### Known limitations
 
 - **Headless mode needs a free client slot.** If the radio reports *"maximum number of
-  connected clients has been reached"*, close another API client first. With SmartSDR
-  running, WSJT-Z binds to it rather than taking a slot of its own.
+  connected clients has been reached"*, close another API client first. With SmartSDR for
+  Windows running, WSJT-Z binds to it rather than taking a slot of its own.
+- **A non-Windows SmartSDR is not coexistence.** Coexistence engages only on
+  `program=SmartSDR-Win`. With SmartSDR for Mac, or any other GUI client, WSJT-Z takes the
+  headless path, which needs both a free client slot and a free slice — close the other
+  client if the radio reports the client limit or if `slice create` fails.
+- **Coexistence needs a free slice.** On a 2-slice radio, SmartSDR has to leave one slice
+  unused; WSJT-Z creates its own on top of whatever is already there.
+- **`transmit set dax=1` is global and is not restored.** Both modes set the radio-wide
+  `transmit set dax=1` at start and leave it that way at exit, so with SmartSDR running
+  your own transmissions take DAX audio for as long as WSJT-Z is up and until you switch
+  it back by hand. Restoring the previous value needs the `dax=` field of the radio's
+  `transmit` status checked against live hardware first.
 - Coexistence has been exercised against a scripted radio (`test_native_flex_transceiver`),
   not yet on the air from this fork.
 - Tested only on an 8000-series radio so far. The donor was developed against 6000-series.

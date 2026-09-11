@@ -225,8 +225,13 @@ void SoundOutput::restart (QIODevice * source)
       m_native_flex_tx_error_reported = false;
       m_native_flex_tx_error_count = 0;
 
-      // Reference stream ID from the captured SmartSDR/DAX
-      // stream.  This value is only for offline comparison.
+      // Reference stream ID from the captured SmartSDR/DAX stream.
+      //
+      // It seeds the stream-id word of every VITA packet template
+      // built below; the live copy that actually goes on the air has
+      // this session's dynamically learned DAX-TX stream ID
+      // substituted into that word before it is queued. Only the
+      // offline dump keeps the reference value.
       m_native_flex_vita_dump_stream_id = 0x84000000u;
 
       // 10 ms at 48 kHz = 480 frames.
