@@ -363,7 +363,18 @@ void NativeFlexTransceiver::capture_owned_slice(
           existing_slice_ids_.insert(
               status_slice);
 
-          if (line.contains("tx=1"))
+          /*
+           * DEVIATION from W7PP: match " tx=1" with its leading
+           * space.
+           *
+           * Slice status fields are space-separated, and a slice line
+           * also carries dax_tx=1. The donor's bare "tx=1" match
+           * therefore latches a slice that is NOT the TX slice, and
+           * that id is later sent back to the radio as
+           * "slice s <n> tx=1" by do_stop() and by the un-key path -
+           * an active mutation of SmartSDR's state, not a read.
+           */
+          if (line.contains(" tx=1"))
             {
               previous_tx_slice_id_ =
                   status_slice;
@@ -950,6 +961,90 @@ void NativeFlexTransceiver::capture_gain_status(
  * addressed a slice that no longer existed and came back
  * 0x5000000D "Invalid slice receiver".
  */
+/*
+ * DEVIATION from W7PP: bounded status-stream drain.
+ *
+ * send_command() returns as soon as it sees the "R<seq>|" line for
+ * the command it sent. FLEX does not guarantee that a subscription's
+ * status dump precedes that response, so a caller that reads state
+ * captured from the status stream the instant send_command() returns
+ * can read it too early. This helper gives the radio a bounded window
+ * to deliver those lines, feeding each one to the same capture set the
+ * three wait loops use.
+ *
+ * FlexVitaReceiver does exactly this on the RX side: it calls
+ * listenTcpFor(tcp, 1500ms) after its own "sub ..." subscriptions
+ * before relying on what they reported.
+ */
+void NativeFlexTransceiver::drain_control_lines(int ms)
+{
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < ms)
+    {
+      if (control_socket_->bytesAvailable() == 0)
+        {
+          control_socket_->waitForReadyRead(250);
+        }
+
+      if (QAbstractSocket::ConnectedState
+          != control_socket_->state())
+        {
+          throw std::runtime_error {
+              "Native FLEX TCP closed while draining status."
+          };
+        }
+
+      if (control_socket_->bytesAvailable() > 0)
+        {
+          pending_control_ += control_socket_->readAll();
+        }
+
+      while (true)
+        {
+          int const cr = pending_control_.indexOf('\r');
+          int const lf = pending_control_.indexOf('\n');
+          int end = -1;
+
+          if (cr >= 0)
+            {
+              end = cr;
+            }
+
+          if (lf >= 0 && (end < 0 || lf < end))
+            {
+              end = lf;
+            }
+
+          if (end < 0)
+            {
+              break;
+            }
+
+          QByteArray line =
+              pending_control_.left(end);
+
+          pending_control_.remove(0, end + 1);
+
+          while (!pending_control_.isEmpty()
+              && ('\r' == pending_control_.at(0)
+                  || '\n' == pending_control_.at(0)))
+            {
+              pending_control_.remove(0, 1);
+            }
+
+          line = line.trimmed();
+
+          capture_smart_sdr_client(line);
+          capture_owned_slice(line);
+          capture_dax_tx_stream(line);
+          capture_transmit_status(line);
+          capture_gain_status(line);
+        }
+    }
+}
+
 void NativeFlexTransceiver::wait_for_owned_slice()
 {
   QElapsedTimer timer;
@@ -1341,6 +1436,7 @@ int NativeFlexTransceiver::do_start()
   api_version_.clear();
   gui_client_id_.clear();
   smart_sdr_client_id_.clear();
+  cached_tx_rf_power_level_ = -1;
   smart_sdr_present_ = false;
   collecting_existing_slices_ = false;
   creating_slice_ = false;
@@ -1534,6 +1630,17 @@ int NativeFlexTransceiver::do_start()
           "sub client all"
       });
 
+  /*
+   * DEVIATION from W7PP: let the client dump arrive before deciding.
+   *
+   * The donor reads smart_sdr_present_ the instant send_command()
+   * returns, i.e. on the "R<seq>|" line. If the radio trails its
+   * client status lines after that response, SmartSDR goes undetected
+   * and the headless "client gui" path runs against a radio that has
+   * SmartSDR up. Drain first (see drain_control_lines()).
+   */
+  drain_control_lines(750);
+
   if (smart_sdr_present_)
     {
       if (smart_sdr_client_id_.isEmpty())
@@ -1558,6 +1665,18 @@ int NativeFlexTransceiver::do_start()
               QString {
                   "sub slice all"
               });
+
+          /*
+           * DEVIATION from W7PP: let the slice dump arrive before
+           * closing the snapshot.
+           *
+           * Same response-ordering race as above, and worse here: if
+           * existing_slice_ids_ is still empty when creating_slice_
+           * opens, the first PRE-EXISTING slice status consumed inside
+           * the create window is mistaken for W7PP's new slice - and
+           * do_stop() then destroys SmartSDR's slice with "slice r".
+           */
+          drain_control_lines(750);
         }
       catch (...)
         {
@@ -1986,6 +2105,7 @@ void NativeFlexTransceiver::do_stop()
   api_version_.clear();
   gui_client_id_.clear();
   smart_sdr_client_id_.clear();
+  cached_tx_rf_power_level_ = -1;
   smart_sdr_present_ = false;
   collecting_existing_slices_ = false;
   creating_slice_ = false;
@@ -2266,12 +2386,15 @@ void NativeFlexTransceiver::do_ptt(bool on)
    * follows a key-up.
    *
    * TransceiverBase::shutdown() calls do_ptt(false) unconditionally
-   * before do_stop(), so the donor's unguarded form hands SmartSDR's
-   * TX slice back before this session has removed its own slice, and
-   * again from do_stop() afterwards. state().ptt() is set true only by
-   * the key-up path above, so it distinguishes a real un-key from the
-   * shutdown sweep; do_stop() remains responsible for the teardown
-   * restore.
+   * whenever the rig is online, keyed or not. A session that never
+   * keyed never took SmartSDR's TX slice, so the donor's unguarded
+   * form writes "slice s <n> tx=1" to a radio whose TX slice this
+   * session never touched: a mutation of somebody else's state with
+   * nothing to undo. state().ptt() is set true only by the key-up
+   * path above, so it marks the un-keys that have something to give
+   * back. When the shutdown does happen while keyed, the restore
+   * still runs here and do_stop() repeats it - restoring a TX slice
+   * that is already the TX slice is a no-op.
    */
   if (state().ptt() && smart_sdr_present_ && previous_tx_slice_id_ >= 0)
     {

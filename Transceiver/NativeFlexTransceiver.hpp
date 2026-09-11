@@ -68,6 +68,7 @@ private:
   void capture_gain_status(QByteArray const& line);
   void wait_for_dax_tx_stream();
   void wait_for_owned_slice();
+  void drain_control_lines(int ms);
   QByteArray send_command(QString const& command);
 
   static Frequency startup_frequency_;
