@@ -2319,6 +2319,22 @@ void MainWindow::readSettings()
 
   m_pwrBandTxMemory=m_settings->value("pwrBandTxMemory").toHash();
   m_pwrBandTuneMemory=m_settings->value("pwrBandTuneMemory").toHash();
+
+  // DEVIATION from W7PP: the per-band Pwr/Tune memory now applies to the
+  // Flex too, but entries saved while another rig was selected are audio
+  // levels for that rig's sound card, not for the Flex's VITA TX path.
+  // Seen on the station: a 43 dB entry from an earlier rig was restored
+  // over the 9.7 dB the Flex had been running at, all but silencing TX.
+  // Drop both memories once, the first time the Flex is the rig with this
+  // build; every band then re-seeds from the current Pwr value on its
+  // first visit, exactly as stock WSJT-Z seeds a band it has never seen.
+  if (m_config.rig_name() == "Flex Native VITA-49"
+      && !m_settings->value ("W7PPNativeFlexPwrMemoryReset", false).toBool ())
+    {
+      m_pwrBandTxMemory.clear ();
+      m_pwrBandTuneMemory.clear ();
+      m_settings->setValue ("W7PPNativeFlexPwrMemoryReset", true);
+    }
   ui->actionEnable_AP_FT8->setChecked (m_settings->value ("FT8AP", false).toBool());
   ui->actionEnable_AP_JT65->setChecked (m_settings->value ("JT65AP", false).toBool());
   ui->actionAuto_Clear_Avg->setChecked (m_settings->value ("AutoClearAvg", false).toBool());
