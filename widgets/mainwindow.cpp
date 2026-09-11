@@ -5427,6 +5427,14 @@ void MainWindow::trim_view (bool checked)
   ui->rh_decodes_widget->layout()->setSpacing(spacing);
   ui->verticalLayout_2->layout()->setSpacing(spacing);
   ui->verticalLayout_3->layout()->setSpacing(spacing);
+  // W7PP : the RF and Pwr sliders sit in nested layouts of their own
+  // now, which the line above does not reach. They take
+  // verticalLayout_3's own spacing, so the label-to-slider gap tracks
+  // the view exactly as it did when both widgets were direct children
+  // of it -- and the compact view reclaims the same space as before.
+  ui->w7ppFlexPwrLayout->layout()->setSpacing(spacing);
+  ui->w7ppFlexRfPowerColumn->layout()->setSpacing(spacing);
+  ui->w7ppFlexPwrColumn->layout()->setSpacing(spacing);
   ui->verticalLayout_5->layout()->setSpacing(spacing);
   ui->verticalLayout_7->layout()->setSpacing(spacing);
   ui->verticalLayout_8->layout()->setSpacing(spacing);
